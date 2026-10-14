@@ -1,0 +1,6 @@
+{
+  "name": "Unlimited T Storage",
+  "description": "Modern photo & video gallery and file manager with automatic cloud backup to private Telegram channels and encrypted Hidden Vault.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
