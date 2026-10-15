@@ -150,6 +150,86 @@ fun BackupScreen(
             }
         }
 
+        // Multi-Channel Storage Pools Status Card
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("multi_channel_status_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Telegram Channels (4 Storage Pools)",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Round-Robin",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    com.example.Constants.TELEGRAM_CHANNEL_IDS.forEachIndexed { index, chId ->
+                        val dest = destinations.firstOrNull { it.channelId == chId }
+                        val isChannelActive = isTelegramConnected && (dest?.lastError == null)
+                        val maskedId = com.example.Constants.getMaskedChannelId(chId)
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isChannelActive) StatusSuccess else StatusError)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = "Channel ${index + 1}: ${if (isChannelActive) "Connected" else "Failed"}",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Text(
+                                        text = "ID: $maskedId",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            Text(
+                                text = if (isChannelActive) "Active" else "Error",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isChannelActive) StatusSuccess else StatusError
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // Active Upload Progress Box
         item {
             AnimatedVisibility(visible = isUploading) {

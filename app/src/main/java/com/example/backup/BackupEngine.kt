@@ -27,6 +27,7 @@ class BackupEngine(private val context: Context) {
     private val destDao = db.destinationDao()
     private val settingDao = db.settingDao()
     private val telegramClient = TelegramApiClient()
+    val uploadManager = com.example.telegram.TelegramUploadManager(context, telegramClient)
     private val manifestManager = ManifestManager(context)
 
     private val engineScope = CoroutineScope(Dispatchers.IO + Job())
@@ -41,19 +42,20 @@ class BackupEngine(private val context: Context) {
     private val _currentJobProgress = MutableStateFlow(0)
     val currentJobProgress: StateFlow<Int> = _currentJobProgress.asStateFlow()
 
-    suspend fun enqueueMedia(media: LocalMediaEntity, channelId: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun enqueueMedia(media: LocalMediaEntity, channelId: String = ""): Boolean = withContext(Dispatchers.IO) {
+        val targetChannel = if (channelId.isNotBlank()) channelId else uploadManager.getNextRoundRobinChannel()
         // Resolve temp file if content uri
         val tempFile = resolveToFile(media.uriString, media.path, media.displayName) ?: return@withContext false
         val sha256 = media.sha256 ?: CryptoManager.calculateSha256(tempFile)
 
         // Deduplication check: Has this file already been backed up to this channel?
         val existingCloud = cloudDao.getBySha256(sha256)
-        if (existingCloud != null && existingCloud.channelId == channelId) {
+        if (existingCloud != null && existingCloud.channelId == targetChannel) {
             // Already backed up!
             return@withContext true
         }
 
-        val existingJob = jobDao.getJob(media.uriString, channelId)
+        val existingJob = jobDao.getJob(media.uriString, targetChannel)
         if (existingJob != null && existingJob.status == "BACKED_UP") {
             return@withContext true
         }
@@ -66,7 +68,7 @@ class BackupEngine(private val context: Context) {
             mimeType = media.mimeType,
             size = media.size,
             folderName = media.folderName,
-            channelId = channelId,
+            channelId = targetChannel,
             status = "QUEUED",
             progressPercent = 0,
             retryCount = 0
@@ -75,17 +77,18 @@ class BackupEngine(private val context: Context) {
         true
     }
 
-    suspend fun enqueueFile(file: File, mimeType: String, channelId: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun enqueueFile(file: File, mimeType: String, channelId: String = ""): Boolean = withContext(Dispatchers.IO) {
         if (!file.exists() || file.isDirectory) return@withContext false
+        val targetChannel = if (channelId.isNotBlank()) channelId else uploadManager.getNextRoundRobinChannel()
         val sha256 = CryptoManager.calculateSha256(file)
 
         val existingCloud = cloudDao.getBySha256(sha256)
-        if (existingCloud != null && existingCloud.channelId == channelId) {
+        if (existingCloud != null && existingCloud.channelId == targetChannel) {
             return@withContext true
         }
 
         val uriString = Uri.fromFile(file).toString()
-        val existingJob = jobDao.getJob(uriString, channelId)
+        val existingJob = jobDao.getJob(uriString, targetChannel)
         if (existingJob != null && existingJob.status == "BACKED_UP") {
             return@withContext true
         }
@@ -98,7 +101,7 @@ class BackupEngine(private val context: Context) {
             mimeType = mimeType,
             size = file.length(),
             folderName = file.parentFile?.name ?: "Files",
-            channelId = channelId,
+            channelId = targetChannel,
             status = "QUEUED",
             progressPercent = 0,
             retryCount = 0
@@ -113,10 +116,10 @@ class BackupEngine(private val context: Context) {
         mimeType: String,
         ivBase64: String,
         saltBase64: String,
-        channelId: String
+        channelId: String = ""
     ): Boolean = withContext(Dispatchers.IO) {
         if (!encryptedFile.exists()) return@withContext false
-        val sha256 = CryptoManager.calculateSha256(encryptedFile)
+        val targetChannel = if (channelId.isNotBlank()) channelId else uploadManager.getNextRoundRobinChannel()
 
         val job = BackupJobEntity(
             uriString = Uri.fromFile(encryptedFile).toString(),
@@ -125,7 +128,7 @@ class BackupEngine(private val context: Context) {
             mimeType = "application/octet-stream",
             size = encryptedFile.length(),
             folderName = "HiddenVault",
-            channelId = channelId,
+            channelId = targetChannel,
             status = "QUEUED",
             isVaultItem = true,
             vaultIvBase64 = ivBase64,
@@ -167,13 +170,7 @@ class BackupEngine(private val context: Context) {
     }
 
     private suspend fun processQueue() = withContext(Dispatchers.IO) {
-        val enabledDestinations = destDao.getEnabledDestinations()
-        val defaultChannelId = com.example.telegram.TelegramConfig.CHANNEL_ID
         val defaultBotToken = com.example.telegram.TelegramConfig.BOT_TOKEN
-
-        // Map destinations by id
-        val destMap = enabledDestinations.associateBy { it.channelId }
-
         var hasMore = true
         var processedCount = 0
 
@@ -185,10 +182,6 @@ class BackupEngine(private val context: Context) {
             }
 
             for (job in pendingJobs) {
-                val dest = destMap[job.channelId] ?: enabledDestinations.firstOrNull()
-                val targetBotToken = dest?.getDecryptedToken() ?: defaultBotToken
-                val targetChatId = dest?.channelId ?: defaultChannelId
-
                 _currentJobFileName.value = job.fileName
                 _currentJobProgress.value = 0
                 jobDao.updateStatus(job.id, "UPLOADING")
@@ -199,26 +192,21 @@ class BackupEngine(private val context: Context) {
                     continue
                 }
 
-                // Upload with progress callback
-                val uploadResult = telegramClient.uploadFile(
-                    botToken = targetBotToken,
-                    chatId = targetChatId,
+                // Upload with multi-channel round-robin and automatic fallback
+                val uploadResult = uploadManager.uploadFileWithFallback(
                     file = targetFile,
                     displayName = job.fileName,
                     mimeType = job.mimeType,
                     caption = "TG Cloud Backup: ${job.fileName} (${job.size / 1024} KB)",
+                    preferredChannelId = job.channelId,
                     onProgress = { percent, _, _ ->
                         _currentJobProgress.value = percent
                         engineScope.launch { jobDao.updateProgress(job.id, percent) }
                     }
                 )
 
-                if (uploadResult.retryAfterSeconds > 0) {
-                    // Rate limit backoff
-                    delay(uploadResult.retryAfterSeconds * 1000L)
-                }
-
                 if (uploadResult.success) {
+                    val finalChannelId = uploadResult.targetChannelId ?: job.channelId
                     val sha256 = CryptoManager.calculateSha256(targetFile)
                     // Persist Cloud Record
                     cloudDao.insert(
@@ -228,7 +216,7 @@ class BackupEngine(private val context: Context) {
                             mimeType = job.mimeType,
                             size = job.size,
                             sha256 = sha256,
-                            channelId = targetChatId,
+                            channelId = finalChannelId,
                             telegramMessageId = uploadResult.messageId,
                             telegramFileId = uploadResult.fileId,
                             uploadTimestamp = System.currentTimeMillis(),
@@ -239,21 +227,21 @@ class BackupEngine(private val context: Context) {
                     )
 
                     jobDao.updateStatus(job.id, "BACKED_UP")
-                    dest?.channelId?.let { destDao.updateLastBackup(it, System.currentTimeMillis()) }
+                    destDao.updateLastBackup(finalChannelId, System.currentTimeMillis())
                     processedCount++
                 } else {
-                    val errorMsg = uploadResult.error ?: "Upload failed"
+                    val errorMsg = uploadResult.error ?: "Upload failed across all channels"
                     jobDao.markFailed(job.id, "FAILED", errorMsg)
-                    dest?.channelId?.let { destDao.updateError(it, errorMsg) }
+                    destDao.updateError(job.channelId, errorMsg)
                 }
 
                 delay(500) // gentle delay between files to avoid hitting Telegram limits
             }
 
             if (processedCount > 0) {
-                // Publish updated manifest to channel
-                for (dest in enabledDestinations) {
-                    manifestManager.publishManifest(dest.getDecryptedToken(), dest.channelId)
+                // Publish updated manifest across all channels
+                for (chId in com.example.Constants.TELEGRAM_CHANNEL_IDS) {
+                    manifestManager.publishManifest(defaultBotToken, chId)
                 }
             }
         }

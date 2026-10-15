@@ -17,6 +17,7 @@ data class ManifestEntry(
     val mimeType: String,
     val size: Long,
     val sha256: String,
+    val channelId: String = "",
     val telegramMessageId: Long,
     val telegramFileId: String,
     val isVaultEncrypted: Boolean = false,

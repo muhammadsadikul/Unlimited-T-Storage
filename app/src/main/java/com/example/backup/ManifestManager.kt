@@ -28,8 +28,12 @@ class ManifestManager(private val context: Context) {
         const val KEY_LATEST_MANIFEST_FILE_ID = "latest_manifest_file_id"
     }
 
-    suspend fun generateManifest(channelId: String): CloudManifest = withContext(Dispatchers.IO) {
-        val records = cloudDao.getRecordsForChannel(channelId)
+    suspend fun generateManifest(channelId: String? = null): CloudManifest = withContext(Dispatchers.IO) {
+        val records = if (channelId.isNullOrBlank()) {
+            cloudDao.getAllRecords()
+        } else {
+            cloudDao.getRecordsForChannel(channelId)
+        }
         val entries = records.map {
             ManifestEntry(
                 id = it.id.toString(),
@@ -38,6 +42,7 @@ class ManifestManager(private val context: Context) {
                 mimeType = it.mimeType,
                 size = it.size,
                 sha256 = it.sha256,
+                channelId = it.channelId,
                 telegramMessageId = it.telegramMessageId,
                 telegramFileId = it.telegramFileId,
                 isVaultEncrypted = it.isVaultEncrypted,
@@ -51,7 +56,7 @@ class ManifestManager(private val context: Context) {
             version = 1,
             appVersion = "1.0",
             generatedAt = System.currentTimeMillis(),
-            channelId = channelId,
+            channelId = channelId ?: "multi_channel",
             totalFiles = entries.size,
             totalBytes = entries.sumOf { it.size },
             entries = entries
@@ -76,6 +81,7 @@ class ManifestManager(private val context: Context) {
             item.put("mimeType", e.mimeType)
             item.put("size", e.size)
             item.put("sha256", e.sha256)
+            item.put("channelId", e.channelId)
             item.put("telegramMessageId", e.telegramMessageId)
             item.put("telegramFileId", e.telegramFileId)
             item.put("isVaultEncrypted", e.isVaultEncrypted)
@@ -102,6 +108,7 @@ class ManifestManager(private val context: Context) {
                     mimeType = item.optString("mimeType", "application/octet-stream"),
                     size = item.optLong("size", 0L),
                     sha256 = item.optString("sha256", ""),
+                    channelId = item.optString("channelId", json.optString("channelId", "")),
                     telegramMessageId = item.optLong("telegramMessageId", 0L),
                     telegramFileId = item.optString("telegramFileId", ""),
                     isVaultEncrypted = item.optBoolean("isVaultEncrypted", false),
@@ -204,7 +211,7 @@ class ManifestManager(private val context: Context) {
                 mimeType = it.mimeType,
                 size = it.size,
                 sha256 = it.sha256,
-                channelId = manifest.channelId,
+                channelId = it.channelId.ifBlank { manifest.channelId },
                 telegramMessageId = it.telegramMessageId,
                 telegramFileId = it.telegramFileId,
                 uploadTimestamp = it.uploadedAt,

@@ -26,14 +26,23 @@ import com.example.BuildConfig
  */
 object TelegramConfig {
     /**
-     * The Telegram Bot Token injected at build time from BuildConfig.
+     * The Telegram Bot Token from Constants / BuildConfig.
      */
-    val BOT_TOKEN: String = BuildConfig.TELEGRAM_BOT_TOKEN
+    val BOT_TOKEN: String = if (BuildConfig.TELEGRAM_BOT_TOKEN.isNotBlank() && !BuildConfig.TELEGRAM_BOT_TOKEN.startsWith("[")) {
+        BuildConfig.TELEGRAM_BOT_TOKEN
+    } else {
+        com.example.Constants.TELEGRAM_BOT_TOKEN
+    }
 
     /**
-     * The private Telegram Channel / Chat ID injected at build time from BuildConfig.
+     * The list of 4 preconfigured Telegram Channel IDs for multi-channel distributed storage.
      */
-    val CHANNEL_ID: String = BuildConfig.TELEGRAM_CHANNEL_ID
+    val CHANNEL_IDS: List<String> = com.example.Constants.TELEGRAM_CHANNEL_IDS
+
+    /**
+     * Primary default channel ID (first channel in rotation).
+     */
+    val CHANNEL_ID: String = CHANNEL_IDS.firstOrNull() ?: "-3922853955"
 
     /**
      * Checks if the credentials have been configured with non-placeholder values.
@@ -42,16 +51,13 @@ object TelegramConfig {
         return BOT_TOKEN.isNotBlank() &&
                 BOT_TOKEN != "[YOUR_BOT_TOKEN]" &&
                 !BOT_TOKEN.startsWith("[") &&
-                CHANNEL_ID.isNotBlank() &&
-                CHANNEL_ID != "[YOUR_CHANNEL_ID]" &&
-                !CHANNEL_ID.startsWith("[")
+                CHANNEL_IDS.isNotEmpty()
     }
 
     /**
      * Returns a masked representation of the Channel ID for safe display in the UI.
      */
-    fun getMaskedChannelId(): String {
-        if (CHANNEL_ID.length <= 6) return "••••"
-        return CHANNEL_ID.take(4) + "••••" + CHANNEL_ID.takeLast(2)
+    fun getMaskedChannelId(channelId: String = CHANNEL_ID): String {
+        return com.example.Constants.getMaskedChannelId(channelId)
     }
 }

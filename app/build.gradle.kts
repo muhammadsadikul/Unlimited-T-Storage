@@ -22,8 +22,8 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
     // Hardcoded Telegram Credentials injected into BuildConfig
-    buildConfigField("String", "TELEGRAM_BOT_TOKEN", "\"[YOUR_BOT_TOKEN]\"")
-    buildConfigField("String", "TELEGRAM_CHANNEL_ID", "\"[YOUR_CHANNEL_ID]\"")
+    buildConfigField("String", "TELEGRAM_BOT_TOKEN", "\"PASTE_YOUR_BOT_TOKEN_HERE\"")
+    buildConfigField("String", "TELEGRAM_CHANNEL_ID", "\"-3922853955\"")
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
@@ -109,7 +109,9 @@ dependencies {
   implementation(libs.androidx.navigation.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
+  // Coil Image Loading & Video Frame Decoder extension
   implementation(libs.coil.compose)
+  implementation(libs.coil.video)
   implementation(libs.androidx.media3.exoplayer)
   implementation(libs.androidx.media3.ui)
   implementation(libs.androidx.work.runtime.ktx)

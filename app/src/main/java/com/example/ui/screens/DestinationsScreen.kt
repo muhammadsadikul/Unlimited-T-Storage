@@ -75,19 +75,21 @@ fun DestinationsScreen(
     onDeleteDestination: (BackupDestinationEntity) -> Unit = {},
     onBack: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     val client = remember { TelegramApiClient() }
+    val uploadManager = remember { com.example.telegram.TelegramUploadManager(context) }
 
     var isChecking by remember { mutableStateOf(false) }
     var connectionStatus by remember { mutableStateOf<String>("Checking connection...") }
     var isConnected by remember { mutableStateOf(false) }
     var botName by remember { mutableStateOf<String?>(null) }
-    var channelTitle by remember { mutableStateOf<String?>(null) }
+    var channelStatuses by remember { mutableStateOf<List<com.example.telegram.ChannelStatus>>(emptyList()) }
 
     fun checkConnection() {
         scope.launch {
             isChecking = true
-            connectionStatus = "Connecting to Telegram..."
+            connectionStatus = "Connecting to Telegram channels..."
             withContext(Dispatchers.IO) {
                 try {
                     val botRes = client.getMe(TelegramConfig.BOT_TOKEN)
@@ -99,22 +101,30 @@ fun DestinationsScreen(
                     val bot = botRes.getOrThrow()
                     botName = bot.username ?: bot.firstName
 
-                    val chatRes = client.getChat(TelegramConfig.BOT_TOKEN, TelegramConfig.CHANNEL_ID)
-                    channelTitle = if (chatRes.isSuccess) chatRes.getOrThrow().title else "Private Storage Channel"
+                    val statuses = uploadManager.checkAllChannelsStatus()
+                    channelStatuses = statuses
 
-                    isConnected = true
-                    connectionStatus = "Connected"
+                    val activeCount = statuses.count { it.isConnected }
+                    isConnected = activeCount > 0
+                    connectionStatus = if (isConnected) {
+                        "Connected ($activeCount/4 channels active)"
+                    } else {
+                        "Telegram connection failed on all channels."
+                    }
 
-                    // Sync the active preconfigured destination to local Room DB
-                    onAddOrUpdateDestination(
-                        BackupDestinationEntity(
-                            channelId = TelegramConfig.CHANNEL_ID,
-                            title = channelTitle ?: "Telegram Cloud Storage",
-                            botToken = TelegramConfig.BOT_TOKEN,
-                            isEnabled = true,
-                            lastBackupAt = System.currentTimeMillis()
+                    // Sync all channels to local Room DB
+                    statuses.forEach { st ->
+                        onAddOrUpdateDestination(
+                            BackupDestinationEntity(
+                                channelId = st.channelId,
+                                title = st.title,
+                                botToken = TelegramConfig.BOT_TOKEN,
+                                isEnabled = st.isConnected,
+                                lastBackupAt = System.currentTimeMillis(),
+                                lastError = st.errorMessage
+                            )
                         )
-                    )
+                    }
                 } catch (e: Exception) {
                     isConnected = false
                     connectionStatus = "Telegram connection failed. Please check your internet or contact the developer."
@@ -223,6 +233,76 @@ fun DestinationsScreen(
                                 Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text("Retry Connection")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Multi-Channel Detailed Status List
+            item {
+                Text("Multi-Channel Storage Pools (4 Channels)", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(6.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth().testTag("channels_list_card"),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        val displayList = if (channelStatuses.isNotEmpty()) {
+                            channelStatuses
+                        } else {
+                            com.example.Constants.TELEGRAM_CHANNEL_IDS.mapIndexed { i, id ->
+                                com.example.telegram.ChannelStatus(
+                                    channelId = id,
+                                    channelIndex = i + 1,
+                                    title = "Channel ${i + 1}",
+                                    isConnected = isConnected
+                                )
+                            }
+                        }
+
+                        displayList.forEach { ch ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                        RoundedCornerShape(10.dp)
+                                    )
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(12.dp)
+                                            .clip(CircleShape)
+                                            .background(if (ch.isConnected) StatusSuccess else StatusError)
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column {
+                                        Text(
+                                            text = "Channel ${ch.channelIndex}: ${if (ch.isConnected) "Connected" else "Disconnected"}",
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                        Text(
+                                            text = "ID: ${com.example.Constants.getMaskedChannelId(ch.channelId)} • ${ch.title}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                Text(
+                                    text = if (ch.isConnected) "Active" else "Offline",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (ch.isConnected) StatusSuccess else StatusError
+                                )
                             }
                         }
                     }

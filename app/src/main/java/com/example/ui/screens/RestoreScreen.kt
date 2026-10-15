@@ -81,6 +81,7 @@ fun RestoreScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val telegramClient = remember { TelegramApiClient() }
+    val restoreManager = remember { com.example.telegram.RestoreManager(telegramClient) }
 
     var masterPassword by remember { mutableStateOf("") }
     var manifestContentInput by remember { mutableStateOf("") }
@@ -270,19 +271,14 @@ fun RestoreScreen(
                                             restoreProgress = ((completed * 100) / toDownload.size)
                                         }
 
-                                        val destFile = File(restoreDir, record.fileName)
-                                        val downloadResult = telegramClient.downloadFile(
-                                            botToken = TelegramConfig.BOT_TOKEN,
-                                            fileId = record.telegramFileId,
-                                            destinationFile = destFile
+                                        val downloadResult = restoreManager.downloadRecord(
+                                            record = record,
+                                            destinationDir = restoreDir
                                         )
 
                                         if (downloadResult.isSuccess) {
-                                            val downloadedSha = CryptoManager.calculateSha256(destFile)
-                                            if (downloadedSha.equals(record.sha256, ignoreCase = true)) {
-                                                withContext(Dispatchers.Main) {
-                                                    restoredIds.add(record.id)
-                                                }
+                                            withContext(Dispatchers.Main) {
+                                                restoredIds.add(record.id)
                                             }
                                         }
                                         completed++
@@ -346,7 +342,7 @@ fun RestoreScreen(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(record.fileName, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
                                 Text(
-                                    text = "${Formatter.formatFileSize(context, record.size)} • Msg ID: ${record.telegramMessageId}",
+                                    text = "${Formatter.formatFileSize(context, record.size)} • Msg ID: ${record.telegramMessageId} • Channel: ${com.example.Constants.getMaskedChannelId(record.channelId)}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

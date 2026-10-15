@@ -95,8 +95,8 @@ fun SettingsScreen(
             ) {
                 Column {
                     SettingsNavigationRow(
-                        title = "Telegram Cloud Connection",
-                        subtitle = "View preconfigured channel status & storage",
+                        title = "Telegram Multi-Channel Storage",
+                        subtitle = "View 4 channels status & round-robin distribution",
                         icon = Icons.Default.CloudDone,
                         onClick = onNavigateToDestinations,
                         tag = "settings_destinations"

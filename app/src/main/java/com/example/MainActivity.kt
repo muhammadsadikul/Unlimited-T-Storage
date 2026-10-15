@@ -234,7 +234,7 @@ fun MainAppContent() {
             isMasterPasswordUnlocked = true
         }
 
-        // Automatic Telegram connection initialization using hardcoded credentials
+        // Automatic Telegram connection initialization across all 4 channels
         scope.launch(Dispatchers.IO) {
             try {
                 val client = com.example.telegram.TelegramApiClient()
@@ -243,20 +243,28 @@ fun MainAppContent() {
                     isTelegramConnected = false
                     telegramConnectionStatusText = "Telegram connection failed. Please check your internet or contact the developer."
                 } else {
-                    val chatRes = client.getChat(com.example.telegram.TelegramConfig.BOT_TOKEN, com.example.telegram.TelegramConfig.CHANNEL_ID)
-                    val title = if (chatRes.isSuccess) chatRes.getOrThrow().title else "Cloud Storage"
-                    isTelegramConnected = true
-                    telegramConnectionStatusText = "Connected"
+                    var connectedCount = 0
+                    for ((index, chId) in com.example.Constants.TELEGRAM_CHANNEL_IDS.withIndex()) {
+                        val chatRes = client.getChat(com.example.telegram.TelegramConfig.BOT_TOKEN, chId)
+                        val title = if (chatRes.isSuccess) {
+                            connectedCount++
+                            chatRes.getOrThrow().title.ifBlank { "Channel ${index + 1}" }
+                        } else {
+                            "Channel ${index + 1}"
+                        }
 
-                    destDao.insert(
-                        com.example.data.database.entity.BackupDestinationEntity(
-                            channelId = com.example.telegram.TelegramConfig.CHANNEL_ID,
-                            title = title,
-                            botToken = com.example.telegram.TelegramConfig.BOT_TOKEN,
-                            isEnabled = true,
-                            lastBackupAt = System.currentTimeMillis()
+                        destDao.insert(
+                            com.example.data.database.entity.BackupDestinationEntity(
+                                channelId = chId,
+                                title = title,
+                                botToken = com.example.telegram.TelegramConfig.BOT_TOKEN,
+                                isEnabled = true,
+                                lastBackupAt = System.currentTimeMillis()
+                            )
                         )
-                    )
+                    }
+                    isTelegramConnected = true
+                    telegramConnectionStatusText = "Connected ($connectedCount/4 channels active)"
                 }
             } catch (e: Exception) {
                 isTelegramConnected = false
@@ -366,10 +374,8 @@ fun MainAppContent() {
                         },
                         onBackupSelected = { selectedItems ->
                             scope.launch {
-                                val targetChannelId = destinations.firstOrNull { it.isEnabled }?.channelId
-                                    ?: com.example.telegram.TelegramConfig.CHANNEL_ID
                                 selectedItems.forEach { media ->
-                                    backupEngine.enqueueMedia(media, targetChannelId)
+                                    backupEngine.enqueueMedia(media)
                                 }
                                 backupEngine.startOrResumeQueue()
                                 currentScreen = Screen.Backup
@@ -427,9 +433,7 @@ fun MainAppContent() {
                     FilesScreen(
                         onBackupFile = { file ->
                             scope.launch {
-                                val targetChannelId = destinations.firstOrNull { it.isEnabled }?.channelId
-                                    ?: com.example.telegram.TelegramConfig.CHANNEL_ID
-                                backupEngine.enqueueFile(file, "application/octet-stream", targetChannelId)
+                                backupEngine.enqueueFile(file, "application/octet-stream")
                                 backupEngine.startOrResumeQueue()
                                 currentScreen = Screen.Backup
                             }
@@ -508,16 +512,13 @@ fun MainAppContent() {
                         },
                         onBackupVaultItem = { item, _ ->
                             scope.launch {
-                                val targetChannelId = destinations.firstOrNull { it.isEnabled }?.channelId
-                                    ?: com.example.telegram.TelegramConfig.CHANNEL_ID
                                 val encFile = File(context.filesDir, "vault/${item.encryptedFileName}")
                                 backupEngine.enqueueVaultItem(
                                     encryptedFile = encFile,
                                     originalName = item.originalName,
                                     mimeType = item.mimeType,
                                     ivBase64 = item.ivBase64,
-                                    saltBase64 = item.saltBase64,
-                                    channelId = targetChannelId
+                                    saltBase64 = item.saltBase64
                                 )
                                 backupEngine.startOrResumeQueue()
                                 currentScreen = Screen.Backup

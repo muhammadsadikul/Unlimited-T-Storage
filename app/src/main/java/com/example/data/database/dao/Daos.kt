@@ -139,12 +139,21 @@ interface CloudRecordDao {
 
     @Query("SELECT COALESCE(SUM(size), 0) FROM cloud_records")
     fun getTotalBytesFlow(): Flow<Long>
+
+    @Query("SELECT COUNT(*) FROM cloud_records WHERE channelId = :channelId")
+    suspend fun getCountForChannel(channelId: String): Int
+
+    @Query("SELECT COALESCE(SUM(size), 0) FROM cloud_records WHERE channelId = :channelId")
+    suspend fun getBytesForChannel(channelId: String): Long
 }
 
 @Dao
 interface DestinationDao {
     @Query("SELECT * FROM backup_destinations")
     fun getAllDestinationsFlow(): Flow<List<BackupDestinationEntity>>
+
+    @Query("SELECT * FROM backup_destinations")
+    suspend fun getAllDestinations(): List<BackupDestinationEntity>
 
     @Query("SELECT * FROM backup_destinations WHERE isEnabled = 1")
     suspend fun getEnabledDestinations(): List<BackupDestinationEntity>
