@@ -5,7 +5,6 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
-import java.io.OutputStream
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.Cipher
@@ -22,7 +21,7 @@ object CryptoManager {
     private const val TAG_LENGTH_BIT = 128
     private const val IV_LENGTH_BYTE = 12
     private const val SALT_LENGTH_BYTE = 16
-    private const val ITERATIONS = 10000
+    private const val ITERATIONS = 15000
     private const val KEY_LENGTH = 256
 
     private val secureRandom = SecureRandom()
@@ -49,6 +48,38 @@ object CryptoManager {
     fun hashPassword(password: String, salt: ByteArray): String {
         val key = deriveKey(password.toCharArray(), salt)
         return Base64.encodeToString(key.encoded, Base64.NO_WRAP)
+    }
+
+    fun encryptText(plainText: String, passphrase: String): EncryptedPayload {
+        val salt = generateSalt()
+        val iv = generateIv()
+        val key = deriveKey(passphrase.toCharArray(), salt)
+
+        val cipher = Cipher.getInstance(ALGORITHM)
+        cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_LENGTH_BIT, iv))
+        val cipherBytes = cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))
+
+        return EncryptedPayload(
+            ciphertextBase64 = Base64.encodeToString(cipherBytes, Base64.NO_WRAP),
+            ivBase64 = Base64.encodeToString(iv, Base64.NO_WRAP),
+            saltBase64 = Base64.encodeToString(salt, Base64.NO_WRAP)
+        )
+    }
+
+    fun decryptText(payload: EncryptedPayload, passphrase: String): String? {
+        return try {
+            val salt = Base64.decode(payload.saltBase64, Base64.NO_WRAP)
+            val iv = Base64.decode(payload.ivBase64, Base64.NO_WRAP)
+            val key = deriveKey(passphrase.toCharArray(), salt)
+
+            val cipher = Cipher.getInstance(ALGORITHM)
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_LENGTH_BIT, iv))
+            val cipherBytes = Base64.decode(payload.ciphertextBase64, Base64.NO_WRAP)
+            val plainBytes = cipher.doFinal(cipherBytes)
+            String(plainBytes, Charsets.UTF_8)
+        } catch (e: Exception) {
+            null
+        }
     }
 
     fun encryptFile(inputFile: File, outputFile: File, password: String): EncryptionMeta {
@@ -101,7 +132,6 @@ object CryptoManager {
             }
             true
         } catch (e: Exception) {
-            e.printStackTrace()
             outputFile.delete()
             false
         }
@@ -126,4 +156,10 @@ object CryptoManager {
 data class EncryptionMeta(
     val saltBase64: String,
     val ivBase64: String
+)
+
+data class EncryptedPayload(
+    val ciphertextBase64: String,
+    val ivBase64: String,
+    val saltBase64: String
 )

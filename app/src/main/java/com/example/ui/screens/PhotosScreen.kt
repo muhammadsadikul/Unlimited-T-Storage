@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDone
@@ -62,6 +63,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
+import coil.request.CachePolicy
 import coil.request.ImageRequest
 import com.example.data.database.entity.LocalMediaEntity
 import com.example.ui.theme.StatusSuccess
@@ -306,14 +309,46 @@ private fun PhotoThumbnailItem(
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            AsyncImage(
+            SubcomposeAsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
                     .data(item.uriString)
                     .crossfade(true)
+                    .size(240, 240)
+                    .memoryCachePolicy(CachePolicy.ENABLED)
+                    .diskCachePolicy(CachePolicy.ENABLED)
                     .build(),
                 contentDescription = item.displayName,
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                contentScale = ContentScale.Crop,
+                loading = {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(18.dp),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                        )
+                    }
+                },
+                error = {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.BrokenImage,
+                            contentDescription = "Failed to load",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
             )
 
             // Video indicator overlay
@@ -404,3 +439,30 @@ private fun PhotoThumbnailItem(
         }
     }
 }
+
+/**
+ * Composable alias for GalleryScreen requested by developer.
+ */
+@Composable
+fun GalleryScreen(
+    mediaList: List<LocalMediaEntity>,
+    backedUpUris: Set<String>,
+    onMediaClick: (LocalMediaEntity) -> Unit,
+    onBackupSelected: (List<LocalMediaEntity>) -> Unit,
+    onToggleFavorite: (LocalMediaEntity) -> Unit,
+    onScanRequest: () -> Unit,
+    isScanning: Boolean,
+    modifier: Modifier = Modifier
+) {
+    PhotosScreen(
+        mediaList = mediaList,
+        backedUpUris = backedUpUris,
+        onMediaClick = onMediaClick,
+        onBackupSelected = onBackupSelected,
+        onToggleFavorite = onToggleFavorite,
+        onScanRequest = onScanRequest,
+        isScanning = isScanning,
+        modifier = modifier
+    )
+}
+

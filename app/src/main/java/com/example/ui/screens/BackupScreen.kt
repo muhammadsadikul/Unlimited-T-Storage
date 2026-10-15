@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -69,6 +70,8 @@ fun BackupScreen(
     isUploading: Boolean,
     currentUploadingName: String?,
     currentUploadingProgress: Int,
+    isTelegramConnected: Boolean = true,
+    connectionStatusText: String = "Connected",
     onStartBackup: () -> Unit,
     onPauseBackup: () -> Unit,
     onRetryFailed: () -> Unit,
@@ -94,7 +97,7 @@ fun BackupScreen(
                     .testTag("manage_destinations_card"),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = if (enabledDestinations.isNotEmpty())
+                    containerColor = if (isTelegramConnected)
                         MaterialTheme.colorScheme.primaryContainer
                     else
                         MaterialTheme.colorScheme.errorContainer
@@ -113,12 +116,12 @@ fun BackupScreen(
                                 .size(44.dp)
                                 .clip(CircleShape)
                                 .background(
-                                    if (enabledDestinations.isNotEmpty()) TelegramBluePrimary else StatusError
+                                    if (isTelegramConnected) TelegramBluePrimary else StatusError
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                if (enabledDestinations.isNotEmpty()) Icons.Default.CloudDone else Icons.Default.CloudOff,
+                                if (isTelegramConnected) Icons.Default.CloudDone else Icons.Default.CloudOff,
                                 contentDescription = null,
                                 tint = Color.White
                             )
@@ -126,23 +129,23 @@ fun BackupScreen(
                         Spacer(modifier = Modifier.width(14.dp))
                         Column {
                             Text(
-                                text = if (enabledDestinations.isNotEmpty())
-                                    "${enabledDestinations.size} Telegram Channel(s) Connected"
-                                else
-                                    "No Telegram Destination Configured",
+                                text = if (isTelegramConnected) "Connected" else "Telegram Connection Failed",
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                text = if (lastBackup != null)
-                                    "Last synced: ${DateFormat.format("yyyy-MM-dd HH:mm", Date(lastBackup))}"
+                                text = if (isTelegramConnected)
+                                    "Preconfigured Private Telegram Channel"
                                 else
-                                    "Tap to set up your private channel & bot",
+                                    connectionStatusText,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (isTelegramConnected)
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                else
+                                    MaterialTheme.colorScheme.onErrorContainer
                             )
                         }
                     }
-                    Icon(Icons.Default.Settings, contentDescription = "Manage")
+                    Icon(Icons.Default.Info, contentDescription = "View Details")
                 }
             }
         }

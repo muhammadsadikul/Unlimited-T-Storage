@@ -158,4 +158,31 @@ class MediaScanner(private val context: Context) {
         val rules = folderRuleDao.getAllRulesFlow()
         standardFolders
     }
+
+    suspend fun deleteMediaItem(item: LocalMediaEntity): Boolean = withContext(Dispatchers.IO) {
+        var deleted = false
+        try {
+            val uri = Uri.parse(item.uriString)
+            val rows = context.contentResolver.delete(uri, null, null)
+            if (rows > 0) {
+                deleted = true
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        try {
+            if (item.path.isNotBlank()) {
+                val file = File(item.path)
+                if (file.exists() && file.delete()) {
+                    deleted = true
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        mediaDao.delete(item)
+        deleted
+    }
 }

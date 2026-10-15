@@ -155,14 +155,34 @@ fun MainAppContent() {
     var selectedMediaForDetail by remember { mutableStateOf<LocalMediaEntity?>(null) }
     var isScanning by remember { mutableStateOf(false) }
 
-    // App Lock PIN authentication state
+    // App Lock & Master Password authentication state
+    var isMasterPasswordSetup by remember { mutableStateOf(false) }
+    var isMasterPasswordUnlocked by remember { mutableStateOf(false) }
+    var showMasterPasswordSetupDialog by remember { mutableStateOf(false) }
+    var masterPasswordInput by remember { mutableStateOf("") }
+    var masterPasswordConfirmInput by remember { mutableStateOf("") }
+    var masterPasswordError by remember { mutableStateOf<String?>(null) }
+
     var isAppLocked by remember { mutableStateOf(false) }
     var appPinInput by remember { mutableStateOf("") }
     var appPinError by remember { mutableStateOf<String?>(null) }
 
+    // Automatic Telegram Connection State
+    var isTelegramConnected by remember { mutableStateOf(false) }
+    var telegramConnectionStatusText by remember { mutableStateOf("Connecting to Telegram...") }
+
+    // If master password is required and not yet unlocked, show only local files
+    val visibleCloudRecords = remember(cloudRecords, isMasterPasswordUnlocked, isMasterPasswordSetup) {
+        if (!isMasterPasswordSetup || isMasterPasswordUnlocked) {
+            cloudRecords
+        } else {
+            emptyList()
+        }
+    }
+
     // Map backed-up files by original path or uri
-    val backedUpUris = remember(cloudRecords) {
-        cloudRecords.map { it.originalPath }.toSet()
+    val backedUpUris = remember(visibleCloudRecords) {
+        visibleCloudRecords.map { it.originalPath }.toSet()
     }
 
     // Permission handling
@@ -204,9 +224,46 @@ fun MainAppContent() {
     }
 
     LaunchedEffect(Unit) {
-        if (authManager.isAppLockEnabled()) {
+        val masterSetup = authManager.isMasterPasswordSetup()
+        isMasterPasswordSetup = masterSetup
+        if (!masterSetup) {
+            showMasterPasswordSetupDialog = true
+        } else if (authManager.isAppLockEnabled()) {
             isAppLocked = true
+        } else {
+            isMasterPasswordUnlocked = true
         }
+
+        // Automatic Telegram connection initialization using hardcoded credentials
+        scope.launch(Dispatchers.IO) {
+            try {
+                val client = com.example.telegram.TelegramApiClient()
+                val botRes = client.getMe(com.example.telegram.TelegramConfig.BOT_TOKEN)
+                if (botRes.isFailure) {
+                    isTelegramConnected = false
+                    telegramConnectionStatusText = "Telegram connection failed. Please check your internet or contact the developer."
+                } else {
+                    val chatRes = client.getChat(com.example.telegram.TelegramConfig.BOT_TOKEN, com.example.telegram.TelegramConfig.CHANNEL_ID)
+                    val title = if (chatRes.isSuccess) chatRes.getOrThrow().title else "Cloud Storage"
+                    isTelegramConnected = true
+                    telegramConnectionStatusText = "Connected"
+
+                    destDao.insert(
+                        com.example.data.database.entity.BackupDestinationEntity(
+                            channelId = com.example.telegram.TelegramConfig.CHANNEL_ID,
+                            title = title,
+                            botToken = com.example.telegram.TelegramConfig.BOT_TOKEN,
+                            isEnabled = true,
+                            lastBackupAt = System.currentTimeMillis()
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                isTelegramConnected = false
+                telegramConnectionStatusText = "Telegram connection failed. Please check your internet or contact the developer."
+            }
+        }
+
         com.example.backup.BackupWorker.enqueuePeriodicBackup(context)
         requestPermissionsAndScan()
     }
@@ -309,16 +366,13 @@ fun MainAppContent() {
                         },
                         onBackupSelected = { selectedItems ->
                             scope.launch {
-                                val activeDest = destinations.firstOrNull { it.isEnabled }
-                                if (activeDest != null) {
-                                    selectedItems.forEach { media ->
-                                        backupEngine.enqueueMedia(media, activeDest.channelId)
-                                    }
-                                    backupEngine.startOrResumeQueue()
-                                    currentScreen = Screen.Backup
-                                } else {
-                                    currentScreen = Screen.Destinations
+                                val targetChannelId = destinations.firstOrNull { it.isEnabled }?.channelId
+                                    ?: com.example.telegram.TelegramConfig.CHANNEL_ID
+                                selectedItems.forEach { media ->
+                                    backupEngine.enqueueMedia(media, targetChannelId)
                                 }
+                                backupEngine.startOrResumeQueue()
+                                currentScreen = Screen.Backup
                             }
                         },
                         onToggleFavorite = { item ->
@@ -340,16 +394,12 @@ fun MainAppContent() {
                         onToggleFavorite = { item ->
                             scope.launch { mediaDao.updateFavorite(item.id, !item.isFavorite) }
                         },
-                        onBackupNow = { item ->
+                        onDeleteMedia = { item ->
                             scope.launch {
-                                val activeDest = destinations.firstOrNull { it.isEnabled }
-                                if (activeDest != null) {
-                                    backupEngine.enqueueMedia(item, activeDest.channelId)
-                                    backupEngine.startOrResumeQueue()
-                                    currentScreen = Screen.Backup
-                                } else {
-                                    currentScreen = Screen.Destinations
-                                }
+                                com.example.ui.screens.deleteMediaFromDevice(context, item)
+                                mediaDao.delete(item)
+                                selectedMediaForDetail = null
+                                currentScreen = Screen.Photos
                             }
                         }
                     )
@@ -377,14 +427,11 @@ fun MainAppContent() {
                     FilesScreen(
                         onBackupFile = { file ->
                             scope.launch {
-                                val activeDest = destinations.firstOrNull { it.isEnabled }
-                                if (activeDest != null) {
-                                    backupEngine.enqueueFile(file, "application/octet-stream", activeDest.channelId)
-                                    backupEngine.startOrResumeQueue()
-                                    currentScreen = Screen.Backup
-                                } else {
-                                    currentScreen = Screen.Destinations
-                                }
+                                val targetChannelId = destinations.firstOrNull { it.isEnabled }?.channelId
+                                    ?: com.example.telegram.TelegramConfig.CHANNEL_ID
+                                backupEngine.enqueueFile(file, "application/octet-stream", targetChannelId)
+                                backupEngine.startOrResumeQueue()
+                                currentScreen = Screen.Backup
                             }
                         }
                     )
@@ -402,6 +449,8 @@ fun MainAppContent() {
                         isUploading = isUploading,
                         currentUploadingName = currentUploadingName,
                         currentUploadingProgress = currentUploadingProgress,
+                        isTelegramConnected = isTelegramConnected,
+                        connectionStatusText = telegramConnectionStatusText,
                         onStartBackup = {
                             backupEngine.startOrResumeQueue()
                             com.example.backup.BackupWorker.enqueueImmediateBackup(context)
@@ -459,22 +508,19 @@ fun MainAppContent() {
                         },
                         onBackupVaultItem = { item, _ ->
                             scope.launch {
-                                val activeDest = destinations.firstOrNull { it.isEnabled }
-                                if (activeDest != null) {
-                                    val encFile = File(context.filesDir, "vault/${item.encryptedFileName}")
-                                    backupEngine.enqueueVaultItem(
-                                        encryptedFile = encFile,
-                                        originalName = item.originalName,
-                                        mimeType = item.mimeType,
-                                        ivBase64 = item.ivBase64,
-                                        saltBase64 = item.saltBase64,
-                                        channelId = activeDest.channelId
-                                    )
-                                    backupEngine.startOrResumeQueue()
-                                    currentScreen = Screen.Backup
-                                } else {
-                                    currentScreen = Screen.Destinations
-                                }
+                                val targetChannelId = destinations.firstOrNull { it.isEnabled }?.channelId
+                                    ?: com.example.telegram.TelegramConfig.CHANNEL_ID
+                                val encFile = File(context.filesDir, "vault/${item.encryptedFileName}")
+                                backupEngine.enqueueVaultItem(
+                                    encryptedFile = encFile,
+                                    originalName = item.originalName,
+                                    mimeType = item.mimeType,
+                                    ivBase64 = item.ivBase64,
+                                    saltBase64 = item.saltBase64,
+                                    channelId = targetChannelId
+                                )
+                                backupEngine.startOrResumeQueue()
+                                currentScreen = Screen.Backup
                             }
                         },
                         onBack = { currentScreen = Screen.Collections }
@@ -483,14 +529,23 @@ fun MainAppContent() {
 
                 is Screen.Restore -> {
                     RestoreScreen(
-                        cloudRecords = cloudRecords,
-                        onImportManifestJson = { jsonStr ->
+                        cloudRecords = visibleCloudRecords,
+                        onImportEncryptedManifest = { rawContent, masterPwd, onResult ->
                             scope.launch {
                                 try {
-                                    val manifest = manifestManager.jsonToManifest(jsonStr)
-                                    manifestManager.importManifestToDatabase(manifest)
+                                    val result = manifestManager.decryptAndParseManifest(rawContent, masterPwd)
+                                    result.fold(
+                                        onSuccess = { manifest ->
+                                            manifestManager.importManifestToDatabase(manifest)
+                                            isMasterPasswordUnlocked = true
+                                            onResult(true, "Restored ${manifest.totalFiles} cloud records successfully!")
+                                        },
+                                        onFailure = { err ->
+                                            onResult(false, err.message ?: "Decryption failed. Please check Master Password.")
+                                        }
+                                    )
                                 } catch (e: Exception) {
-                                    e.printStackTrace()
+                                    onResult(false, e.message ?: "Failed to process manifest")
                                 }
                             }
                         },
@@ -515,29 +570,127 @@ fun MainAppContent() {
         }
     }
 
-    // App Lock PIN Modal
+    // First-Launch Master Password Setup Modal
+    if (showMasterPasswordSetupDialog) {
+        AlertDialog(
+            onDismissRequest = { /* Require deliberate action */ },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Security, contentDescription = null, tint = TelegramBluePrimary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Setup Master Password")
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.85f)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.Top) {
+                            Text(
+                                "CRITICAL WARNING: Your Master Password encrypts the cloud backup manifest and files uploaded to Telegram. If lost, your encrypted backups cannot be recovered.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = masterPasswordInput,
+                        onValueChange = {
+                            masterPasswordInput = it
+                            masterPasswordError = null
+                        },
+                        label = { Text("Master Password") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("setup_master_password_input")
+                    )
+
+                    OutlinedTextField(
+                        value = masterPasswordConfirmInput,
+                        onValueChange = {
+                            masterPasswordConfirmInput = it
+                            masterPasswordError = null
+                        },
+                        label = { Text("Confirm Master Password") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("setup_master_password_confirm_input")
+                    )
+
+                    if (masterPasswordError != null) {
+                        Text(masterPasswordError!!, color = StatusError, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (masterPasswordInput.length < 4) {
+                            masterPasswordError = "Master Password must be at least 4 characters"
+                            return@Button
+                        }
+                        if (masterPasswordInput != masterPasswordConfirmInput) {
+                            masterPasswordError = "Passwords do not match"
+                            return@Button
+                        }
+                        scope.launch {
+                            authManager.setupMasterPassword(masterPasswordInput)
+                            isMasterPasswordSetup = true
+                            isMasterPasswordUnlocked = true
+                            showMasterPasswordSetupDialog = false
+                            masterPasswordInput = ""
+                            masterPasswordConfirmInput = ""
+                        }
+                    },
+                    modifier = Modifier.testTag("setup_master_password_button")
+                ) {
+                    Text("Protect & Save")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showMasterPasswordSetupDialog = false
+                        isMasterPasswordUnlocked = false
+                    }
+                ) {
+                    Text("Skip (Local Mode Only)")
+                }
+            }
+        )
+    }
+
+    // App Lock & Cloud Unlock Modal
     if (isAppLocked) {
         AlertDialog(
-            onDismissRequest = { /* Cannot dismiss without PIN */ },
+            onDismissRequest = { /* Must enter credentials or select local mode */ },
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Lock, contentDescription = null, tint = TelegramBluePrimary)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("App Locked")
+                    Text("Unlock Unlimited T Storage")
                 }
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Enter your PIN to access Unlimited T Storage.")
+                    Text(
+                        "Enter your Master Password or PIN to decrypt cloud catalogs and access Telegram backups.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                     OutlinedTextField(
                         value = appPinInput,
                         onValueChange = {
                             appPinInput = it
                             appPinError = null
                         },
-                        label = { Text("PIN") },
+                        label = { Text("Master Password / PIN") },
                         visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("app_pin_input")
                     )
@@ -550,17 +703,44 @@ fun MainAppContent() {
                 Button(
                     onClick = {
                         scope.launch {
-                            if (authManager.verifyAppPin(appPinInput)) {
-                                isAppLocked = false
-                                appPinInput = ""
-                            } else {
-                                appPinError = "Incorrect PIN"
+                            when (val result = authManager.verifyMasterPassword(appPinInput)) {
+                                is com.example.security.AuthResult.Success -> {
+                                    isAppLocked = false
+                                    isMasterPasswordUnlocked = true
+                                    appPinInput = ""
+                                    appPinError = null
+                                }
+                                is com.example.security.AuthResult.LockedOut -> {
+                                    appPinError = "Brute-force protection: Locked out for ${result.remainingSeconds}s"
+                                }
+                                is com.example.security.AuthResult.InvalidPassword -> {
+                                    if (authManager.verifyAppPin(appPinInput)) {
+                                        isAppLocked = false
+                                        isMasterPasswordUnlocked = true
+                                        appPinInput = ""
+                                        appPinError = null
+                                    } else {
+                                        appPinError = "Incorrect password or PIN"
+                                    }
+                                }
                             }
                         }
                     },
                     modifier = Modifier.testTag("app_pin_unlock_button")
                 ) {
                     Text("Unlock")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        isAppLocked = false
+                        isMasterPasswordUnlocked = false
+                        appPinInput = ""
+                        appPinError = null
+                    }
+                ) {
+                    Text("Local Files Only")
                 }
             }
         )

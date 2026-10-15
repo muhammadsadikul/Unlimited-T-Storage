@@ -77,7 +77,16 @@ data class BackupDestinationEntity(
     val isEnabled: Boolean = true,
     val lastBackupAt: Long? = null,
     val lastError: String? = null
-)
+) {
+    fun getDecryptedToken(): String {
+        val payload = com.example.security.EncryptedData.deserialize(botToken)
+        return if (payload != null) {
+            com.example.security.KeystoreHelper.decrypt(payload)
+        } else {
+            botToken
+        }
+    }
+}
 
 @Entity(tableName = "vault_items")
 data class VaultItemEntity(

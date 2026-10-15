@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
@@ -94,9 +95,9 @@ fun SettingsScreen(
             ) {
                 Column {
                     SettingsNavigationRow(
-                        title = "Telegram Destinations",
-                        subtitle = "Configure private channels & bot tokens",
-                        icon = Icons.Default.Send,
+                        title = "Telegram Cloud Connection",
+                        subtitle = "View preconfigured channel status & storage",
+                        icon = Icons.Default.CloudDone,
                         onClick = onNavigateToDestinations,
                         tag = "settings_destinations"
                     )

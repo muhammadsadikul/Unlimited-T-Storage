@@ -6,6 +6,9 @@ import com.example.data.database.entity.AppSettingEntity
 import com.example.data.database.entity.CloudRecordEntity
 import com.example.data.model.CloudManifest
 import com.example.data.model.ManifestEntry
+import com.example.security.AuthManager
+import com.example.security.CryptoManager
+import com.example.security.EncryptedPayload
 import com.example.telegram.TelegramApiClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -20,7 +23,7 @@ class ManifestManager(private val context: Context) {
     private val telegramClient = TelegramApiClient()
 
     companion object {
-        const val MANIFEST_CAPTION = "#TELEGRAM_GALLERY_MANIFEST_V1"
+        const val MANIFEST_CAPTION = "#TELEGRAM_GALLERY_MANIFEST_V1_ENCRYPTED"
         const val KEY_LATEST_MANIFEST_MSG_ID = "latest_manifest_msg_id"
         const val KEY_LATEST_MANIFEST_FILE_ID = "latest_manifest_file_id"
     }
@@ -120,20 +123,44 @@ class ManifestManager(private val context: Context) {
         )
     }
 
-    suspend fun publishManifest(botToken: String, channelId: String): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun publishManifest(
+        botToken: String = com.example.telegram.TelegramConfig.BOT_TOKEN,
+        channelId: String = com.example.telegram.TelegramConfig.CHANNEL_ID,
+        masterPasswordOverride: String? = null
+    ): Result<String> = withContext(Dispatchers.IO) {
         try {
+            val masterPassword = masterPasswordOverride ?: AuthManager.activeMasterPasswordSession
             val manifest = generateManifest(channelId)
             val jsonStr = manifestToJson(manifest)
-            val tempFile = File(context.cacheDir, "manifest_v1.json")
-            tempFile.writeText(jsonStr)
+
+            val tempFile: File
+            val displayName: String
+
+            if (!masterPassword.isNullOrBlank()) {
+                val encryptedPayload = CryptoManager.encryptText(jsonStr, masterPassword)
+                val envelope = JSONObject().apply {
+                    put("encrypted", true)
+                    put("version", 1)
+                    put("iv", encryptedPayload.ivBase64)
+                    put("salt", encryptedPayload.saltBase64)
+                    put("ciphertext", encryptedPayload.ciphertextBase64)
+                }
+                tempFile = File(context.cacheDir, "manifest_v1.enc")
+                tempFile.writeText(envelope.toString())
+                displayName = "unlimited_storage_manifest.enc"
+            } else {
+                tempFile = File(context.cacheDir, "manifest_v1.json")
+                tempFile.writeText(jsonStr)
+                displayName = "unlimited_storage_manifest.json"
+            }
 
             val uploadResult = telegramClient.uploadFile(
                 botToken = botToken,
                 chatId = channelId,
                 file = tempFile,
-                displayName = "tg_cloud_gallery_manifest.json",
-                mimeType = "application/json",
-                caption = "$MANIFEST_CAPTION - Updated ${manifest.totalFiles} files"
+                displayName = displayName,
+                mimeType = "application/octet-stream",
+                caption = "$MANIFEST_CAPTION - Backed up ${manifest.totalFiles} files"
             )
 
             tempFile.delete()
@@ -141,12 +168,31 @@ class ManifestManager(private val context: Context) {
             if (uploadResult.success) {
                 settingDao.set(AppSettingEntity(KEY_LATEST_MANIFEST_MSG_ID, uploadResult.messageId.toString()))
                 settingDao.set(AppSettingEntity(KEY_LATEST_MANIFEST_FILE_ID, uploadResult.fileId))
-                Result.success("Manifest published (Message ID: ${uploadResult.messageId})")
+                Result.success("Encrypted manifest published (Message ID: ${uploadResult.messageId})")
             } else {
                 Result.failure(Exception(uploadResult.error ?: "Failed to upload manifest"))
             }
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    fun decryptAndParseManifest(rawText: String, masterPassword: String): Result<CloudManifest> {
+        return try {
+            val json = JSONObject(rawText.trim())
+            if (json.optBoolean("encrypted", false)) {
+                val iv = json.getString("iv")
+                val salt = json.getString("salt")
+                val ciphertext = json.getString("ciphertext")
+                val payload = EncryptedPayload(ciphertextBase64 = ciphertext, ivBase64 = iv, saltBase64 = salt)
+                val decryptedJson = CryptoManager.decryptText(payload, masterPassword)
+                    ?: return Result.failure(SecurityException("Incorrect Master Password. Decryption failed."))
+                Result.success(jsonToManifest(decryptedJson))
+            } else {
+                Result.success(jsonToManifest(rawText))
+            }
+        } catch (e: Exception) {
+            Result.failure(SecurityException("Failed to decrypt or parse manifest: ${e.message}"))
         }
     }
 

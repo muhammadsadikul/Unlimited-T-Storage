@@ -20,6 +20,10 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    // Hardcoded Telegram Credentials injected into BuildConfig
+    buildConfigField("String", "TELEGRAM_BOT_TOKEN", "\"[YOUR_BOT_TOKEN]\"")
+    buildConfigField("String", "TELEGRAM_CHANNEL_ID", "\"[YOUR_CHANNEL_ID]\"")
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
@@ -106,6 +110,8 @@ dependencies {
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
+  implementation(libs.androidx.media3.exoplayer)
+  implementation(libs.androidx.media3.ui)
   implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.androidx.biometric)
   implementation(libs.converter.moshi)

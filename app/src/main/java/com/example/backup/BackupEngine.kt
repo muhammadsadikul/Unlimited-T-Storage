@@ -168,7 +168,8 @@ class BackupEngine(private val context: Context) {
 
     private suspend fun processQueue() = withContext(Dispatchers.IO) {
         val enabledDestinations = destDao.getEnabledDestinations()
-        if (enabledDestinations.isEmpty()) return@withContext
+        val defaultChannelId = com.example.telegram.TelegramConfig.CHANNEL_ID
+        val defaultBotToken = com.example.telegram.TelegramConfig.BOT_TOKEN
 
         // Map destinations by id
         val destMap = enabledDestinations.associateBy { it.channelId }
@@ -185,10 +186,8 @@ class BackupEngine(private val context: Context) {
 
             for (job in pendingJobs) {
                 val dest = destMap[job.channelId] ?: enabledDestinations.firstOrNull()
-                if (dest == null) {
-                    jobDao.markFailed(job.id, "FAILED", "Destination not configured or disabled")
-                    continue
-                }
+                val targetBotToken = dest?.getDecryptedToken() ?: defaultBotToken
+                val targetChatId = dest?.channelId ?: defaultChannelId
 
                 _currentJobFileName.value = job.fileName
                 _currentJobProgress.value = 0
@@ -202,8 +201,8 @@ class BackupEngine(private val context: Context) {
 
                 // Upload with progress callback
                 val uploadResult = telegramClient.uploadFile(
-                    botToken = dest.botToken,
-                    chatId = dest.channelId,
+                    botToken = targetBotToken,
+                    chatId = targetChatId,
                     file = targetFile,
                     displayName = job.fileName,
                     mimeType = job.mimeType,
@@ -229,7 +228,7 @@ class BackupEngine(private val context: Context) {
                             mimeType = job.mimeType,
                             size = job.size,
                             sha256 = sha256,
-                            channelId = dest.channelId,
+                            channelId = targetChatId,
                             telegramMessageId = uploadResult.messageId,
                             telegramFileId = uploadResult.fileId,
                             uploadTimestamp = System.currentTimeMillis(),
@@ -240,12 +239,12 @@ class BackupEngine(private val context: Context) {
                     )
 
                     jobDao.updateStatus(job.id, "BACKED_UP")
-                    destDao.updateLastBackup(dest.channelId, System.currentTimeMillis())
+                    dest?.channelId?.let { destDao.updateLastBackup(it, System.currentTimeMillis()) }
                     processedCount++
                 } else {
                     val errorMsg = uploadResult.error ?: "Upload failed"
                     jobDao.markFailed(job.id, "FAILED", errorMsg)
-                    destDao.updateError(dest.channelId, errorMsg)
+                    dest?.channelId?.let { destDao.updateError(it, errorMsg) }
                 }
 
                 delay(500) // gentle delay between files to avoid hitting Telegram limits
@@ -254,7 +253,7 @@ class BackupEngine(private val context: Context) {
             if (processedCount > 0) {
                 // Publish updated manifest to channel
                 for (dest in enabledDestinations) {
-                    manifestManager.publishManifest(dest.botToken, dest.channelId)
+                    manifestManager.publishManifest(dest.getDecryptedToken(), dest.channelId)
                 }
             }
         }

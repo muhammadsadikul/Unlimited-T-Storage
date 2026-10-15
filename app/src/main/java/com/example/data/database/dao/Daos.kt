@@ -43,6 +43,12 @@ interface MediaDao {
 
     @Query("SELECT COUNT(*) FROM media_items")
     fun getMediaCountFlow(): Flow<Int>
+
+    @Delete
+    suspend fun delete(media: LocalMediaEntity)
+
+    @Query("DELETE FROM media_items WHERE id = :id")
+    suspend fun deleteById(id: Long)
 }
 
 @Dao

@@ -1,7 +1,6 @@
 package com.example.ui.screens
 
 import android.os.Environment
-import android.text.format.DateFormat
 import android.text.format.Formatter
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -17,17 +16,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -54,39 +53,42 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.example.data.database.entity.CloudRecordEntity
 import com.example.security.CryptoManager
 import com.example.telegram.TelegramApiClient
+import com.example.telegram.TelegramConfig
 import com.example.ui.theme.StatusError
 import com.example.ui.theme.StatusSuccess
-import com.example.ui.theme.StatusUploading
+import com.example.ui.theme.StatusWarning
 import com.example.ui.theme.TelegramBluePrimary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.Date
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RestoreScreen(
     cloudRecords: List<CloudRecordEntity>,
-    onImportManifestJson: (String) -> Unit,
+    onImportEncryptedManifest: (rawContent: String, masterPassword: String, onResult: (Boolean, String?) -> Unit) -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val telegramClient = remember { TelegramApiClient() }
 
-    var botToken by remember { mutableStateOf("") }
-    var manifestJsonInput by remember { mutableStateOf("") }
+    var masterPassword by remember { mutableStateOf("") }
+    var manifestContentInput by remember { mutableStateOf("") }
     var showGuideDialog by remember { mutableStateOf(false) }
     var isRestoring by remember { mutableStateOf(false) }
+    var isDecryptingManifest by remember { mutableStateOf(false) }
+    var decryptStatusMessage by remember { mutableStateOf<String?>(null) }
+    var isDecryptSuccess by remember { mutableStateOf(false) }
     var restoreStatusText by remember { mutableStateOf<String?>(null) }
     var restoreProgress by remember { mutableStateOf(0) }
 
@@ -117,25 +119,25 @@ fun RestoreScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Recovery Concept Card
+            // Critical Security Warning Card
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f))
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.CloudDownload, contentDescription = null, tint = TelegramBluePrimary)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("New-Phone Cloud Recovery", style = MaterialTheme.typography.titleMedium)
+                    Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
+                        Icon(Icons.Default.Warning, contentDescription = null, tint = StatusError, modifier = Modifier.size(24.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text("Critical Master Password Protection", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "Your cloud backup index is encrypted with AES-256-GCM. If you do not enter your exact Master Password, the cloud backup cannot be decrypted and will remain locked.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
                         }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            "Lost your old phone? Paste your backup manifest JSON or load from Telegram to reconstruct your entire photo & file cloud library without needing the old device's local database.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
                     }
                 }
             }
@@ -151,42 +153,73 @@ fun RestoreScreen(
                         Text("Rebuild Cloud File Index", style = MaterialTheme.typography.titleSmall)
 
                         OutlinedTextField(
-                            value = botToken,
-                            onValueChange = { botToken = it },
-                            label = { Text("Telegram Bot Token (for downloading files)") },
-                            placeholder = { Text("123456:ABC-DEF...") },
-                            modifier = Modifier.fillMaxWidth().testTag("restore_bot_token"),
+                            value = masterPassword,
+                            onValueChange = {
+                                masterPassword = it
+                                decryptStatusMessage = null
+                            },
+                            label = { Text("Master Password (Required to Decrypt)") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                            modifier = Modifier.fillMaxWidth().testTag("restore_master_password"),
                             singleLine = true
                         )
 
                         OutlinedTextField(
-                            value = manifestJsonInput,
-                            onValueChange = { manifestJsonInput = it },
-                            label = { Text("Paste Manifest JSON Content") },
-                            placeholder = { Text("{\"version\":1, \"entries\":[...]} or export from TG channel") },
-                            modifier = Modifier.fillMaxWidth().height(100.dp).testTag("restore_manifest_json_input"),
+                            value = manifestContentInput,
+                            onValueChange = {
+                                manifestContentInput = it
+                                decryptStatusMessage = null
+                            },
+                            label = { Text("Encrypted Manifest Content or JSON") },
+                            placeholder = { Text("Paste content of manifest_v1.enc downloaded from Telegram channel") },
+                            modifier = Modifier.fillMaxWidth().height(90.dp).testTag("restore_manifest_json_input"),
                             maxLines = 4
                         )
 
+                        if (decryptStatusMessage != null) {
+                            Text(
+                                text = decryptStatusMessage!!,
+                                color = if (isDecryptSuccess) StatusSuccess else StatusError,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+
                         Button(
                             onClick = {
-                                if (manifestJsonInput.isNotBlank()) {
-                                    onImportManifestJson(manifestJsonInput.trim())
+                                if (masterPassword.isNotBlank() && manifestContentInput.isNotBlank()) {
+                                    isDecryptingManifest = true
+                                    onImportEncryptedManifest(manifestContentInput.trim(), masterPassword.trim()) { success, err ->
+                                        isDecryptingManifest = false
+                                        isDecryptSuccess = success
+                                        decryptStatusMessage = if (success) {
+                                            "Decryption successful: Cloud catalog reconstructed!"
+                                        } else {
+                                            "Decryption failed: ${err ?: "Incorrect Master Password"}"
+                                        }
+                                    }
                                 }
                             },
-                            enabled = manifestJsonInput.isNotBlank(),
+                            enabled = masterPassword.isNotBlank() && manifestContentInput.isNotBlank() && !isDecryptingManifest,
                             modifier = Modifier.fillMaxWidth().testTag("import_manifest_button"),
                             colors = ButtonDefaults.buttonColors(containerColor = TelegramBluePrimary)
                         ) {
-                            Icon(Icons.Default.Refresh, contentDescription = null)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Import Manifest & Reconstruct Index")
+                            if (isDecryptingManifest) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Decrypting with AES-256-GCM...")
+                            } else {
+                                Icon(Icons.Default.Refresh, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Decrypt & Reconstruct Index")
+                            }
                         }
                     }
                 }
             }
 
-            // Progress Banner
+            // Restore Progress Banner
             if (isRestoring) {
                 item {
                     Card(
@@ -213,13 +246,13 @@ fun RestoreScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Cloud Backed-Up Files (${cloudRecords.size})", style = MaterialTheme.typography.titleMedium)
+                    Text("Decrypted Cloud Backups (${cloudRecords.size})", style = MaterialTheme.typography.titleMedium)
 
                     if (cloudRecords.isNotEmpty()) {
                         Button(
                             onClick = {
-                                if (botToken.isBlank()) {
-                                    restoreStatusText = "Please provide your Bot Token above to download files."
+                                if (TelegramConfig.BOT_TOKEN.isBlank()) {
+                                    restoreStatusText = "Telegram connection failed. Please check your internet or contact the developer."
                                     return@Button
                                 }
                                 val toDownload = if (selectedRecords.isNotEmpty()) selectedRecords.toList() else cloudRecords
@@ -239,13 +272,12 @@ fun RestoreScreen(
 
                                         val destFile = File(restoreDir, record.fileName)
                                         val downloadResult = telegramClient.downloadFile(
-                                            botToken = botToken.trim(),
+                                            botToken = TelegramConfig.BOT_TOKEN,
                                             fileId = record.telegramFileId,
                                             destinationFile = destFile
                                         )
 
                                         if (downloadResult.isSuccess) {
-                                            // Verify SHA-256 checksum!
                                             val downloadedSha = CryptoManager.calculateSha256(destFile)
                                             if (downloadedSha.equals(record.sha256, ignoreCase = true)) {
                                                 withContext(Dispatchers.Main) {
@@ -282,7 +314,7 @@ fun RestoreScreen(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                     ) {
                         Box(modifier = Modifier.padding(24.dp), contentAlignment = Alignment.Center) {
-                            Text("No cloud records yet. Back up files or paste a manifest to recover.")
+                            Text("No cloud backups unlocked. Enter your Master Password and manifest above.")
                         }
                     }
                 }
@@ -341,19 +373,19 @@ fun RestoreScreen(
         if (showGuideDialog) {
             AlertDialog(
                 onDismissRequest = { showGuideDialog = false },
-                title = { Text("Disaster Recovery Guide") },
+                title = { Text("Master Password Disaster Recovery") },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("1. When you configure backup on your primary device, the app continuously updates a versioned manifest 'manifest_v1.json' pinned to your Telegram channel.")
-                        Text("2. On your new device: Install TG Cloud Gallery.")
-                        Text("3. Add your Bot Token and Channel ID.")
-                        Text("4. Download the pinned manifest_v1.json from your Telegram channel, copy its text, and paste it into the field above.")
-                        Text("5. Tap 'Import Manifest'. Your entire cloud catalog is restored instantly.")
-                        Text("6. Tap 'Restore All' to download originals with automatic SHA-256 integrity verification.")
+                        Text("1. When backups run, the app encrypts your entire file catalog with AES-256-GCM using your Master Password.")
+                        Text("2. The encrypted file 'manifest_v1.enc' is sent to your private Telegram channel.")
+                        Text("3. On a new phone: Download 'manifest_v1.enc' from your Telegram channel.")
+                        Text("4. Enter your Master Password and paste the manifest file content.")
+                        Text("5. If the Master Password matches, your files are decrypted and can be restored with SHA-256 verification.")
+                        Text("6. If the Master Password is forgotten, encrypted Telegram backups cannot be recovered by anyone.")
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = { showGuideDialog = false }) { Text("Close") }
+                    TextButton(onClick = { showGuideDialog = false }) { Text("Understood") }
                 }
             )
         }

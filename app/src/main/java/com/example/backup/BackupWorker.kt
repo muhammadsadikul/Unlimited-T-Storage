@@ -100,7 +100,10 @@ class BackupWorker(
         for (job in pendingJobs) {
             if (isStopped) return@withContext Result.retry()
 
-            val dest = destMap[job.channelId] ?: enabledDestinations.firstOrNull() ?: continue
+            val dest = destMap[job.channelId] ?: enabledDestinations.firstOrNull()
+            val targetBotToken = dest?.getDecryptedToken() ?: com.example.telegram.TelegramConfig.BOT_TOKEN
+            val targetChatId = dest?.channelId ?: com.example.telegram.TelegramConfig.CHANNEL_ID
+
             jobDao.updateStatus(job.id, "UPLOADING")
 
             val targetFile = resolveToFile(job.uriString, job.filePath, job.fileName)
@@ -110,8 +113,8 @@ class BackupWorker(
             }
 
             val uploadResult = telegramClient.uploadFile(
-                botToken = dest.botToken,
-                chatId = dest.channelId,
+                botToken = targetBotToken,
+                chatId = targetChatId,
                 file = targetFile,
                 displayName = job.fileName,
                 mimeType = job.mimeType,
@@ -136,7 +139,7 @@ class BackupWorker(
                         mimeType = job.mimeType,
                         size = job.size,
                         sha256 = sha256,
-                        channelId = dest.channelId,
+                        channelId = targetChatId,
                         telegramMessageId = uploadResult.messageId,
                         telegramFileId = uploadResult.fileId,
                         uploadTimestamp = System.currentTimeMillis(),
@@ -147,7 +150,7 @@ class BackupWorker(
                 )
 
                 jobDao.updateStatus(job.id, "BACKED_UP")
-                destDao.updateLastBackup(dest.channelId, System.currentTimeMillis())
+                dest?.channelId?.let { destDao.updateLastBackup(it, System.currentTimeMillis()) }
                 processedCount++
             } else {
                 jobDao.markFailed(job.id, "FAILED", uploadResult.error ?: "Upload failed")
@@ -158,7 +161,7 @@ class BackupWorker(
 
         if (processedCount > 0) {
             for (dest in enabledDestinations) {
-                manifestManager.publishManifest(dest.botToken, dest.channelId)
+                manifestManager.publishManifest(dest.getDecryptedToken(), dest.channelId)
             }
         }
 
