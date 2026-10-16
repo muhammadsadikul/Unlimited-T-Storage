@@ -4,7 +4,14 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "media_items")
+@Entity(
+    tableName = "media_items",
+    indices = [
+        Index(value = ["folderName"]),
+        Index(value = ["dateAdded"]),
+        Index(value = ["isFavorite"])
+    ]
+)
 data class LocalMediaEntity(
     @PrimaryKey val id: Long,
     val uriString: String,

@@ -93,11 +93,22 @@ fun GalleryScreen(
 ) {
     val context = LocalContext.current
 
-    // ImageLoader configured with VideoFrameDecoder for automatic video thumbnail extraction
+    // ImageLoader configured with memory cache, disk cache, and VideoFrameDecoder
     val imageLoader = remember(context) {
         ImageLoader.Builder(context)
             .components {
                 add(VideoFrameDecoder.Factory())
+            }
+            .memoryCache {
+                coil.memory.MemoryCache.Builder(context)
+                    .maxSizePercent(0.25)
+                    .build()
+            }
+            .diskCache {
+                coil.disk.DiskCache.Builder()
+                    .directory(context.cacheDir.resolve("image_cache"))
+                    .maxSizeBytes(512L * 1024L * 1024L)
+                    .build()
             }
             .crossfade(true)
             .respectCacheHeaders(false)

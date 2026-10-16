@@ -1,0 +1,11 @@
+# Baseline Profile for Unlimited T Storage
+HS com/example/MainActivity
+HS com/example/MainAppContentKt
+HS com/example/ui/screens/PhotosScreenKt
+HS com/example/ui/screens/GalleryScreenKt
+HS com/example/ui/screens/CollectionsScreenKt
+HS com/example/ui/screens/FilesScreenKt
+HS com/example/ui/screens/SettingsScreenKt
+HS com/example/ui/screens/BackupScreenKt
+HS com/example/security/AuthManager
+HS com/example/data/database/AppDatabase
