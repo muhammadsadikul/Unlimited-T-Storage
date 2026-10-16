@@ -175,9 +175,71 @@ class ManifestManager(private val context: Context) {
             if (uploadResult.success) {
                 settingDao.set(AppSettingEntity(KEY_LATEST_MANIFEST_MSG_ID, uploadResult.messageId.toString()))
                 settingDao.set(AppSettingEntity(KEY_LATEST_MANIFEST_FILE_ID, uploadResult.fileId))
+                // Automatically pin the manifest in the channel for instant discovery across devices
+                telegramClient.pinChatMessage(botToken, channelId, uploadResult.messageId)
                 Result.success("Encrypted manifest published (Message ID: ${uploadResult.messageId})")
             } else {
                 Result.failure(Exception(uploadResult.error ?: "Failed to upload manifest"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Automatically connects to Telegram, finds the manifest file from pinned messages or settings,
+     * downloads it, decrypts it using the user's master password, and imports it to the local catalog.
+     */
+    suspend fun fetchManifestFromTelegramAndDecrypt(
+        masterPassword: String,
+        botToken: String = com.example.telegram.TelegramConfig.BOT_TOKEN
+    ): Result<CloudManifest> = withContext(Dispatchers.IO) {
+        try {
+            // 1. Query Telegram channels for pinned manifest file
+            var manifestFileId: String? = null
+            for (chId in com.example.Constants.TELEGRAM_CHANNEL_IDS) {
+                val pinnedId = telegramClient.getChatPinnedFileId(botToken, chId)
+                if (!pinnedId.isNullOrBlank()) {
+                    manifestFileId = pinnedId
+                    break
+                }
+            }
+
+            // 2. Fallback to locally cached manifest file ID
+            if (manifestFileId.isNullOrBlank()) {
+                manifestFileId = settingDao.get(KEY_LATEST_MANIFEST_FILE_ID)
+            }
+
+            if (manifestFileId.isNullOrBlank()) {
+                return@withContext Result.failure(
+                    java.io.FileNotFoundException("Manifest file not found on Telegram channels. Please ensure a backup has been published first.")
+                )
+            }
+
+            // Download manifest file from Telegram
+            val cacheFile = File(context.cacheDir, "manifest_restore_${System.currentTimeMillis()}.tmp")
+            val downloadRes = telegramClient.downloadFile(
+                botToken = botToken,
+                fileId = manifestFileId,
+                destinationFile = cacheFile
+            )
+
+            if (downloadRes.isFailure) {
+                val err = downloadRes.exceptionOrNull()?.message ?: "Failed to download manifest from Telegram"
+                return@withContext Result.failure(Exception(err))
+            }
+
+            val downloadedFile = downloadRes.getOrThrow()
+            val rawContent = downloadedFile.readText()
+            downloadedFile.delete()
+
+            val decryptRes = decryptAndParseManifest(rawContent, masterPassword)
+            if (decryptRes.isSuccess) {
+                val manifest = decryptRes.getOrThrow()
+                importManifestToDatabase(manifest)
+                Result.success(manifest)
+            } else {
+                decryptRes
             }
         } catch (e: Exception) {
             Result.failure(e)

@@ -56,7 +56,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -226,11 +230,10 @@ fun FilesScreen(
                             if (item.isDirectory) {
                                 currentDir = item.file
                             } else {
-                                // Attempt to open or share
                                 shareOrOpenFile(context, item.file, item.mimeType)
                             }
                         },
-                        onBackup = { onBackupFile(item.file) }
+                        onBackup = { fileToBackup -> onBackupFile(fileToBackup) }
                     )
                 }
             }
@@ -242,10 +245,11 @@ fun FilesScreen(
 private fun FileRowItem(
     item: FileItem,
     onClick: () -> Unit,
-    onBackup: () -> Unit
+    onBackup: (File) -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     Card(
         modifier = Modifier
@@ -289,29 +293,35 @@ private fun FileRowItem(
                 )
             }
 
-            if (!item.isDirectory) {
-                IconButton(onClick = onBackup, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        Icons.Default.CloudUpload,
-                        contentDescription = "Backup to Telegram",
-                        tint = TelegramBluePrimary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            }
-
             Box {
                 IconButton(onClick = { showMenu = true }, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Default.MoreVert, contentDescription = "More")
                 }
                 DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Zip to Backup") },
+                        leadingIcon = { Icon(Icons.Default.Archive, contentDescription = null, tint = TelegramBluePrimary) },
+                        onClick = {
+                            showMenu = false
+                            scope.launch(Dispatchers.IO) {
+                                val zipName = "${item.name.substringBeforeLast('.')}_backup_${System.currentTimeMillis()}.zip"
+                                val zipFile = File(context.cacheDir, zipName)
+                                val success = zipFolderOrFile(item.file, zipFile)
+                                if (success && zipFile.exists() && zipFile.length() > 0) {
+                                    withContext(Dispatchers.Main) {
+                                        onBackup(zipFile)
+                                    }
+                                }
+                            }
+                        }
+                    )
                     if (!item.isDirectory) {
                         DropdownMenuItem(
                             text = { Text("Backup to Telegram") },
                             leadingIcon = { Icon(Icons.Default.CloudUpload, contentDescription = null) },
                             onClick = {
                                 showMenu = false
-                                onBackup()
+                                onBackup(item.file)
                             }
                         )
                         DropdownMenuItem(
@@ -326,6 +336,31 @@ private fun FileRowItem(
                 }
             }
         }
+    }
+}
+
+private fun zipFolderOrFile(sourceFile: File, zipFile: File): Boolean {
+    try {
+        java.util.zip.ZipOutputStream(java.io.BufferedOutputStream(java.io.FileOutputStream(zipFile))).use { zos ->
+            if (sourceFile.isDirectory) {
+                val basePath = sourceFile.toPath()
+                java.nio.file.Files.walk(basePath).use { stream ->
+                    stream.filter { java.nio.file.Files.isRegularFile(it) }.forEach { path ->
+                        val relativePath = basePath.relativize(path).toString()
+                        zos.putNextEntry(java.util.zip.ZipEntry(relativePath))
+                        java.nio.file.Files.copy(path, zos)
+                        zos.closeEntry()
+                    }
+                }
+            } else {
+                zos.putNextEntry(java.util.zip.ZipEntry(sourceFile.name))
+                sourceFile.inputStream().use { it.copyTo(zos) }
+                zos.closeEntry()
+            }
+        }
+        return true
+    } catch (e: Exception) {
+        return false
     }
 }
 

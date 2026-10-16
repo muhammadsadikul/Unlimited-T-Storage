@@ -38,11 +38,10 @@ data class ChannelStatus(
  * Manager handling distributed uploads across multiple Telegram channels.
  *
  * Implements:
- * 1. Round-Robin & Least Recently Used distribution to spread uploads evenly across all 4 channels,
- *    achieving virtually unlimited storage capacity.
- * 2. Automatic channel failover: If upload to one channel fails (e.g. rate limit, Telegram restriction,
- *    temporary server error), it automatically rotates and attempts the remaining channels in rotation.
- * 3. Sanitized error handling: Never logs sensitive bot tokens or channel IDs in Logcat.
+ * 1. Round-Robin distribution across all 4 channels formatted with "-100".
+ * 2. Automatic channel failover: If upload to one channel fails, automatically tries next channels in rotation.
+ * 3. Real live API status verification: No fake or hardcoded "Connected" status.
+ * 4. Sanitized logging: Never leaks sensitive bot tokens in Logcat.
  */
 class TelegramUploadManager(
     private val context: Context? = null,
@@ -53,8 +52,22 @@ class TelegramUploadManager(
         private val roundRobinCounter = AtomicInteger(0)
     }
 
-    val channelIds: List<String> = Constants.TELEGRAM_CHANNEL_IDS
+    val channelIds: List<String> = Constants.TELEGRAM_CHANNEL_IDS.map { Constants.formatChannelId(it) }
     val botToken: String = TelegramConfig.BOT_TOKEN
+
+    /**
+     * Checks if the bot token can authenticate with Telegram's getMe endpoint.
+     */
+    suspend fun checkBotConnection(): Result<String> = withContext(Dispatchers.IO) {
+        val res = telegramClient.getMe(botToken)
+        if (res.isSuccess) {
+            val bot = res.getOrThrow()
+            Result.success(bot.username ?: bot.firstName)
+        } else {
+            val err = res.exceptionOrNull()?.message ?: "Failed to authenticate bot token with Telegram"
+            Result.failure(Exception(err))
+        }
+    }
 
     /**
      * Gets the next channel ID according to the Round-Robin strategy.
@@ -84,8 +97,7 @@ class TelegramUploadManager(
             )
         }
 
-        // Generate prioritized candidate channel list:
-        val startingChannel = preferredChannelId?.takeIf { channelIds.contains(it) }
+        val startingChannel = preferredChannelId?.let { Constants.formatChannelId(it) }?.takeIf { channelIds.contains(it) }
             ?: getNextRoundRobinChannel()
         val startingIndex = channelIds.indexOf(startingChannel).coerceAtLeast(0)
 
@@ -97,11 +109,12 @@ class TelegramUploadManager(
         var lastError: String? = null
 
         for ((attemptIndex, candidateChannelId) in candidateChannels.withIndex()) {
-            attemptedChannels.add(candidateChannelId)
+            val formattedChannelId = Constants.formatChannelId(candidateChannelId)
+            attemptedChannels.add(formattedChannelId)
 
             val result = telegramClient.uploadFile(
                 botToken = botToken,
-                chatId = candidateChannelId,
+                chatId = formattedChannelId,
                 file = file,
                 displayName = displayName,
                 mimeType = mimeType,
@@ -112,14 +125,13 @@ class TelegramUploadManager(
             if (result.success) {
                 return@withContext MultiChannelUploadResult(
                     success = true,
-                    targetChannelId = candidateChannelId,
+                    targetChannelId = formattedChannelId,
                     messageId = result.messageId,
                     fileId = result.fileId,
                     attemptedChannelIds = attemptedChannels
                 )
             } else {
                 lastError = result.error ?: "Upload failed on channel"
-                // Log sanitarily without leaking channel id or bot token
                 Log.w(
                     TAG,
                     "Channel attempt ${attemptIndex + 1}/${candidateChannels.size} failed. Trying next channel in pool..."
@@ -136,21 +148,22 @@ class TelegramUploadManager(
     }
 
     /**
-     * Checks the live status of all 4 channels.
+     * Checks the real live status of all 4 channels by contacting Telegram's getChat API.
      */
     suspend fun checkAllChannelsStatus(): List<ChannelStatus> = withContext(Dispatchers.IO) {
         val db = context?.let { AppDatabase.getDatabase(it) }
         val cloudDao = db?.cloudRecordDao()
 
-        channelIds.mapIndexed { index, channelId ->
-            val chatRes = telegramClient.getChat(botToken, channelId)
-            val fileCount = cloudDao?.getCountForChannel(channelId) ?: 0
-            val totalBytes = cloudDao?.getBytesForChannel(channelId) ?: 0L
+        channelIds.mapIndexed { index, rawChannelId ->
+            val formattedId = Constants.formatChannelId(rawChannelId)
+            val chatRes = telegramClient.getChat(botToken, formattedId)
+            val fileCount = cloudDao?.getCountForChannel(formattedId) ?: 0
+            val totalBytes = cloudDao?.getBytesForChannel(formattedId) ?: 0L
 
             if (chatRes.isSuccess) {
                 val chat = chatRes.getOrThrow()
                 ChannelStatus(
-                    channelId = channelId,
+                    channelId = formattedId,
                     channelIndex = index + 1,
                     title = chat.title.ifBlank { "Channel ${index + 1}" },
                     isConnected = true,
@@ -160,7 +173,7 @@ class TelegramUploadManager(
             } else {
                 val errorMsg = chatRes.exceptionOrNull()?.message ?: "Unable to connect"
                 ChannelStatus(
-                    channelId = channelId,
+                    channelId = formattedId,
                     channelIndex = index + 1,
                     title = "Channel ${index + 1}",
                     isConnected = false,

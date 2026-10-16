@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -62,10 +63,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -225,10 +228,12 @@ fun MainAppContent() {
 
     LaunchedEffect(Unit) {
         val masterSetup = authManager.isMasterPasswordSetup()
+        val isSkipped = authManager.isMasterPasswordSkipped()
+        val appLockEnabled = authManager.isAppLockEnabled()
         isMasterPasswordSetup = masterSetup
-        if (!masterSetup) {
+        if (!masterSetup && !isSkipped) {
             showMasterPasswordSetupDialog = true
-        } else if (authManager.isAppLockEnabled()) {
+        } else if (appLockEnabled && masterSetup) {
             isAppLocked = true
         } else {
             isMasterPasswordUnlocked = true
@@ -241,12 +246,14 @@ fun MainAppContent() {
                 val botRes = client.getMe(com.example.telegram.TelegramConfig.BOT_TOKEN)
                 if (botRes.isFailure) {
                     isTelegramConnected = false
-                    telegramConnectionStatusText = "Telegram connection failed. Please check your internet or contact the developer."
+                    telegramConnectionStatusText = "Connection failed. Please check your internet."
                 } else {
                     var connectedCount = 0
                     for ((index, chId) in com.example.Constants.TELEGRAM_CHANNEL_IDS.withIndex()) {
-                        val chatRes = client.getChat(com.example.telegram.TelegramConfig.BOT_TOKEN, chId)
-                        val title = if (chatRes.isSuccess) {
+                        val formattedChId = com.example.Constants.formatChannelId(chId)
+                        val chatRes = client.getChat(com.example.telegram.TelegramConfig.BOT_TOKEN, formattedChId)
+                        val isConn = chatRes.isSuccess
+                        val title = if (isConn) {
                             connectedCount++
                             chatRes.getOrThrow().title.ifBlank { "Channel ${index + 1}" }
                         } else {
@@ -255,20 +262,25 @@ fun MainAppContent() {
 
                         destDao.insert(
                             com.example.data.database.entity.BackupDestinationEntity(
-                                channelId = chId,
+                                channelId = formattedChId,
                                 title = title,
                                 botToken = com.example.telegram.TelegramConfig.BOT_TOKEN,
-                                isEnabled = true,
+                                isEnabled = isConn,
                                 lastBackupAt = System.currentTimeMillis()
                             )
                         )
                     }
-                    isTelegramConnected = true
-                    telegramConnectionStatusText = "Connected ($connectedCount/4 channels active)"
+                    if (connectedCount > 0) {
+                        isTelegramConnected = true
+                        telegramConnectionStatusText = "Connected ($connectedCount/4 channels active)"
+                    } else {
+                        isTelegramConnected = false
+                        telegramConnectionStatusText = "Connection failed. Please check your internet."
+                    }
                 }
             } catch (e: Exception) {
                 isTelegramConnected = false
-                telegramConnectionStatusText = "Telegram connection failed. Please check your internet or contact the developer."
+                telegramConnectionStatusText = "Connection failed. Please check your internet."
             }
         }
 
@@ -294,16 +306,17 @@ fun MainAppContent() {
                         }
                     },
                     actions = {
-                        // Cloud sync status button in top bar
-                        IconButton(onClick = { currentScreen = Screen.Backup }) {
-                            if (isUploading) {
-                                Icon(Icons.Default.CloudUpload, contentDescription = "Uploading", tint = StatusUploading)
-                            } else if (failedJobsCount > 0) {
-                                Icon(Icons.Default.CloudUpload, contentDescription = "Failed uploads", tint = StatusError)
-                            } else if (cloudRecords.isNotEmpty()) {
-                                Icon(Icons.Default.CloudDone, contentDescription = "Synced", tint = StatusSuccess)
-                            } else {
-                                Icon(Icons.Default.CloudUpload, contentDescription = "Backup", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (currentScreen is Screen.Photos) {
+                            IconButton(onClick = { currentScreen = Screen.Backup }) {
+                                if (isUploading) {
+                                    Icon(Icons.Default.CloudUpload, contentDescription = "Uploading", tint = StatusUploading)
+                                } else if (failedJobsCount > 0) {
+                                    Icon(Icons.Default.CloudUpload, contentDescription = "Failed uploads", tint = StatusError)
+                                } else if (cloudRecords.isNotEmpty()) {
+                                    Icon(Icons.Default.CloudDone, contentDescription = "Synced", tint = StatusSuccess)
+                                } else {
+                                    Icon(Icons.Default.CloudUpload, contentDescription = "Backup", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
                             }
                         }
                     },
@@ -315,7 +328,7 @@ fun MainAppContent() {
         },
         bottomBar = {
             if (currentScreen is Screen.Photos || currentScreen is Screen.Collections ||
-                currentScreen is Screen.Files || currentScreen is Screen.Backup || currentScreen is Screen.Settings) {
+                currentScreen is Screen.Files || currentScreen is Screen.Settings) {
                 NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surface,
                     tonalElevation = 4.dp
@@ -324,7 +337,6 @@ fun MainAppContent() {
                         Screen.Photos to Icons.Default.Photo,
                         Screen.Collections to Icons.Default.Collections,
                         Screen.Files to Icons.Default.Folder,
-                        Screen.Backup to Icons.Default.CloudUpload,
                         Screen.Settings to Icons.Default.Settings
                     )
 
@@ -333,19 +345,7 @@ fun MainAppContent() {
                         NavigationBarItem(
                             selected = isSelected,
                             onClick = { currentScreen = screen },
-                            icon = {
-                                if (screen is Screen.Backup && (pendingJobsCount > 0 || failedJobsCount > 0)) {
-                                    BadgedBox(badge = {
-                                        Badge(containerColor = if (failedJobsCount > 0) StatusError else TelegramBluePrimary) {
-                                            Text(if (failedJobsCount > 0) "! " else pendingJobsCount.toString())
-                                        }
-                                    }) {
-                                        Icon(icon, contentDescription = screen.title)
-                                    }
-                                } else {
-                                    Icon(icon, contentDescription = screen.title)
-                                }
-                            },
+                            icon = { Icon(icon, contentDescription = screen.title) },
                             label = { Text(screen.title) },
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = TelegramBluePrimary,
@@ -558,7 +558,8 @@ fun MainAppContent() {
                     SettingsScreen(
                         onNavigateToDestinations = { currentScreen = Screen.Destinations },
                         onNavigateToRestore = { currentScreen = Screen.Restore },
-                        onNavigateToVault = { currentScreen = Screen.Vault }
+                        onNavigateToVault = { currentScreen = Screen.Vault },
+                        onNavigateToBackup = { currentScreen = Screen.Backup }
                     )
                 }
 
@@ -571,31 +572,38 @@ fun MainAppContent() {
         }
     }
 
-    // First-Launch Master Password Setup Modal
+    // First-Launch Master Password Setup Modal (Futuristic Modern Design)
     if (showMasterPasswordSetupDialog) {
         AlertDialog(
             onDismissRequest = { /* Require deliberate action */ },
+            shape = RoundedCornerShape(24.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Security, contentDescription = null, tint = TelegramBluePrimary)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Setup Master Password")
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(TelegramBluePrimary.copy(alpha = 0.2f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.Security, contentDescription = null, tint = TelegramBluePrimary, modifier = Modifier.size(24.dp))
+                    }
+                    Spacer(modifier = Modifier.width(14.dp))
+                    Text(
+                        "Secure Master Vault",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
                 }
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.85f)),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.Top) {
-                            Text(
-                                "CRITICAL WARNING: Your Master Password encrypts the cloud backup manifest and files uploaded to Telegram. If lost, your encrypted backups cannot be recovered.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                        }
-                    }
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Text(
+                        "Set a secure Master Password to encrypt your cloud backup manifests. Your backups are fully secured with client-side encryption.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
                     OutlinedTextField(
                         value = masterPasswordInput,
@@ -607,6 +615,7 @@ fun MainAppContent() {
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.fillMaxWidth().testTag("setup_master_password_input")
                     )
 
@@ -620,6 +629,7 @@ fun MainAppContent() {
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.fillMaxWidth().testTag("setup_master_password_confirm_input")
                     )
 
@@ -632,7 +642,7 @@ fun MainAppContent() {
                 Button(
                     onClick = {
                         if (masterPasswordInput.length < 4) {
-                            masterPasswordError = "Master Password must be at least 4 characters"
+                            masterPasswordError = "Password must be at least 4 characters"
                             return@Button
                         }
                         if (masterPasswordInput != masterPasswordConfirmInput) {
@@ -641,6 +651,7 @@ fun MainAppContent() {
                         }
                         scope.launch {
                             authManager.setupMasterPassword(masterPasswordInput)
+                            authManager.setMasterPasswordSkipped(false)
                             isMasterPasswordSetup = true
                             isMasterPasswordUnlocked = true
                             showMasterPasswordSetupDialog = false
@@ -648,40 +659,60 @@ fun MainAppContent() {
                             masterPasswordConfirmInput = ""
                         }
                     },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = TelegramBluePrimary),
                     modifier = Modifier.testTag("setup_master_password_button")
                 ) {
-                    Text("Protect & Save")
+                    Text("Protect & Encrypt", fontWeight = FontWeight.SemiBold)
                 }
             },
             dismissButton = {
                 TextButton(
                     onClick = {
-                        showMasterPasswordSetupDialog = false
-                        isMasterPasswordUnlocked = false
+                        scope.launch {
+                            authManager.setMasterPasswordSkipped(true)
+                            showMasterPasswordSetupDialog = false
+                            isMasterPasswordUnlocked = true
+                        }
                     }
                 ) {
-                    Text("Skip (Local Mode Only)")
+                    Text("Skip (Local Mode)", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         )
     }
 
-    // App Lock & Cloud Unlock Modal
+    // App Lock & Cloud Unlock Modal (Futuristic Modern Design)
     if (isAppLocked) {
         AlertDialog(
             onDismissRequest = { /* Must enter credentials or select local mode */ },
+            shape = RoundedCornerShape(24.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Lock, contentDescription = null, tint = TelegramBluePrimary)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Unlock Unlimited T Storage")
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(TelegramBluePrimary.copy(alpha = 0.2f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.Lock, contentDescription = null, tint = TelegramBluePrimary, modifier = Modifier.size(24.dp))
+                    }
+                    Spacer(modifier = Modifier.width(14.dp))
+                    Text(
+                        "Unlock Vault",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
                 }
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     Text(
                         "Enter your Master Password or PIN to decrypt cloud catalogs and access Telegram backups.",
-                        style = MaterialTheme.typography.bodySmall
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     OutlinedTextField(
                         value = appPinInput,
@@ -693,6 +724,7 @@ fun MainAppContent() {
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.fillMaxWidth().testTag("app_pin_input")
                     )
                     if (appPinError != null) {
@@ -712,7 +744,7 @@ fun MainAppContent() {
                                     appPinError = null
                                 }
                                 is com.example.security.AuthResult.LockedOut -> {
-                                    appPinError = "Brute-force protection: Locked out for ${result.remainingSeconds}s"
+                                    appPinError = "Locked out for ${result.remainingSeconds}s"
                                 }
                                 is com.example.security.AuthResult.InvalidPassword -> {
                                     if (authManager.verifyAppPin(appPinInput)) {
@@ -727,21 +759,26 @@ fun MainAppContent() {
                             }
                         }
                     },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = TelegramBluePrimary),
                     modifier = Modifier.testTag("app_pin_unlock_button")
                 ) {
-                    Text("Unlock")
+                    Text("Unlock", fontWeight = FontWeight.SemiBold)
                 }
             },
             dismissButton = {
                 TextButton(
                     onClick = {
-                        isAppLocked = false
-                        isMasterPasswordUnlocked = false
-                        appPinInput = ""
-                        appPinError = null
+                        scope.launch {
+                            authManager.setMasterPasswordSkipped(true)
+                            isAppLocked = false
+                            isMasterPasswordUnlocked = true
+                            appPinInput = ""
+                            appPinError = null
+                        }
                     }
                 ) {
-                    Text("Local Files Only")
+                    Text("Skip (Local Mode)", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         )

@@ -42,7 +42,7 @@ object TelegramConfig {
     /**
      * Primary default channel ID (first channel in rotation).
      */
-    val CHANNEL_ID: String = CHANNEL_IDS.firstOrNull() ?: "-3922853955"
+    val CHANNEL_ID: String = CHANNEL_IDS.firstOrNull() ?: "-1003922853955"
 
     /**
      * Checks if the credentials have been configured with non-placeholder values.

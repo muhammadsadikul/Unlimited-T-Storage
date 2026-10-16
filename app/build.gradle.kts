@@ -22,8 +22,8 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
     // Hardcoded Telegram Credentials injected into BuildConfig
-    buildConfigField("String", "TELEGRAM_BOT_TOKEN", "\"8916322348:AAF-_jWCtvjPjoOmJYCgXckO1AqnGGpDXD0\"")
-    buildConfigField("String", "TELEGRAM_CHANNEL_ID", "\"-3922853955\"")
+    buildConfigField("String", "TELEGRAM_BOT_TOKEN", "\"8916322348:AAGJ1lLkigwOEmHOzVI88F3GrX_z_eMnnnA\"")
+    buildConfigField("String", "TELEGRAM_CHANNEL_ID", "\"-1003922853955\"")
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,

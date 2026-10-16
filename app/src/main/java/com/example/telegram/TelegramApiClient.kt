@@ -1,10 +1,10 @@
 package com.example.telegram
 
+import com.example.Constants
 import com.example.data.model.TelegramBotInfo
 import com.example.data.model.TelegramChatInfo
 import com.example.data.model.TelegramUploadResult
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
@@ -29,6 +29,22 @@ class TelegramApiClient(
     companion object {
         const val MAX_BOT_UPLOAD_SIZE = 50L * 1024L * 1024L // 50MB
         private const val BASE_URL = "https://api.telegram.org/bot"
+
+        // Hidden debug logs storing exact Telegram JSON error responses
+        private val _debugLogs = mutableListOf<String>()
+        val debugLogs: List<String>
+            get() = synchronized(_debugLogs) { _debugLogs.toList() }
+
+        fun addDebugLog(entry: String) {
+            synchronized(_debugLogs) {
+                if (_debugLogs.size >= 50) _debugLogs.removeAt(0)
+                _debugLogs.add(entry)
+            }
+        }
+
+        fun clearDebugLogs() {
+            synchronized(_debugLogs) { _debugLogs.clear() }
+        }
     }
 
     suspend fun getMe(botToken: String): Result<TelegramBotInfo> = withContext(Dispatchers.IO) {
@@ -49,17 +65,21 @@ class TelegramApiClient(
                         )
                     )
                 } else {
+                    val errorLog = "getMe Error (HTTP ${response.code}): $body"
+                    addDebugLog(errorLog)
                     Result.failure(IOException(json.optString("description", "Failed to connect bot")))
                 }
             }
         } catch (e: Exception) {
+            addDebugLog("getMe Exception: ${e.message}")
             Result.failure(e)
         }
     }
 
     suspend fun getChat(botToken: String, chatId: String): Result<TelegramChatInfo> = withContext(Dispatchers.IO) {
+        val formattedChatId = Constants.formatChannelId(chatId)
         try {
-            val url = "$BASE_URL$botToken/getChat?chat_id=$chatId"
+            val url = "$BASE_URL$botToken/getChat?chat_id=$formattedChatId"
             val request = Request.Builder().url(url).build()
             client.newCall(request).execute().use { response ->
                 val body = response.body?.string().orEmpty()
@@ -75,11 +95,51 @@ class TelegramApiClient(
                         )
                     )
                 } else {
+                    val errorLog = "getChat ($formattedChatId) Error (HTTP ${response.code}): $body"
+                    addDebugLog(errorLog)
                     Result.failure(IOException(json.optString("description", "Channel not found or bot lacks permission")))
                 }
             }
         } catch (e: Exception) {
+            addDebugLog("getChat ($formattedChatId) Exception: ${e.message}")
             Result.failure(e)
+        }
+    }
+
+    suspend fun getChatPinnedFileId(botToken: String, chatId: String): String? = withContext(Dispatchers.IO) {
+        val formattedChatId = Constants.formatChannelId(chatId)
+        try {
+            val url = "$BASE_URL$botToken/getChat?chat_id=$formattedChatId"
+            val request = Request.Builder().url(url).build()
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                val json = JSONObject(body)
+                if (json.optBoolean("ok")) {
+                    val result = json.getJSONObject("result")
+                    val pinned = result.optJSONObject("pinned_message")
+                    val document = pinned?.optJSONObject("document")
+                    return@withContext document?.optString("file_id")
+                }
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun pinChatMessage(botToken: String, chatId: String, messageId: Long): Boolean = withContext(Dispatchers.IO) {
+        val formattedChatId = Constants.formatChannelId(chatId)
+        try {
+            val url = "$BASE_URL$botToken/pinChatMessage?chat_id=$formattedChatId&message_id=$messageId&disable_notification=true"
+            val request = Request.Builder().url(url).post(RequestBody.create(null, ByteArray(0))).build()
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                val json = JSONObject(body)
+                json.optBoolean("ok", false)
+            }
+        } catch (e: Exception) {
+            addDebugLog("pinChatMessage Exception: ${e.message}")
+            false
         }
     }
 
@@ -92,6 +152,7 @@ class TelegramApiClient(
         caption: String? = null,
         onProgress: (percent: Int, bytesWritten: Long, totalBytes: Long) -> Unit = { _, _, _ -> }
     ): TelegramUploadResult = withContext(Dispatchers.IO) {
+        val formattedChatId = Constants.formatChannelId(chatId)
         if (!file.exists()) {
             return@withContext TelegramUploadResult(success = false, error = "File not found: ${file.absolutePath}")
         }
@@ -111,7 +172,7 @@ class TelegramApiClient(
 
             val multipartBuilder = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
-                .addFormDataPart("chat_id", chatId)
+                .addFormDataPart("chat_id", formattedChatId)
                 .addFormDataPart("document", displayName, countingRequestBody)
 
             if (!caption.isNullOrBlank()) {
@@ -129,6 +190,7 @@ class TelegramApiClient(
 
                 if (response.code == 429) {
                     val retryAfter = json.optJSONObject("parameters")?.optInt("retry_after", 5) ?: 5
+                    addDebugLog("uploadFile 429 RateLimit: $bodyStr")
                     return@withContext TelegramUploadResult(
                         success = false,
                         error = "Rate limited by Telegram. Retry after $retryAfter seconds",
@@ -138,9 +200,10 @@ class TelegramApiClient(
 
                 if (json.optBoolean("ok")) {
                     val result = json.getJSONObject("result")
-                    val messageId = result.getLong("message_id")
+                    val messageId = result.optLong("message_id", 0L)
                     val document = result.optJSONObject("document")
-                    val fileId = document?.optString("file_id", "") ?: ""
+                    val fileId = document?.optString("file_id") ?: ""
+
                     TelegramUploadResult(
                         success = true,
                         messageId = messageId,
@@ -148,6 +211,7 @@ class TelegramApiClient(
                     )
                 } else {
                     val desc = json.optString("description", "Upload failed")
+                    addDebugLog("uploadFile Error (HTTP ${response.code}): $bodyStr")
                     TelegramUploadResult(
                         success = false,
                         error = desc
@@ -155,6 +219,7 @@ class TelegramApiClient(
                 }
             }
         } catch (e: Exception) {
+            addDebugLog("uploadFile Exception: ${e.message}")
             TelegramUploadResult(
                 success = false,
                 error = e.localizedMessage ?: "Network error during upload"
@@ -172,10 +237,12 @@ class TelegramApiClient(
             val getFileUrl = "$BASE_URL$botToken/getFile?file_id=$fileId"
             val getFileRequest = Request.Builder().url(getFileUrl).build()
             val filePath = client.newCall(getFileRequest).execute().use { response ->
-                val json = JSONObject(response.body?.string().orEmpty())
+                val body = response.body?.string().orEmpty()
+                val json = JSONObject(body)
                 if (json.optBoolean("ok")) {
                     json.getJSONObject("result").getString("file_path")
                 } else {
+                    addDebugLog("getFile Error (HTTP ${response.code}): $body")
                     throw IOException(json.optString("description", "Failed to get file path"))
                 }
             }
@@ -184,6 +251,7 @@ class TelegramApiClient(
             val downloadRequest = Request.Builder().url(downloadUrl).build()
             client.newCall(downloadRequest).execute().use { response ->
                 if (!response.isSuccessful) {
+                    addDebugLog("downloadFile Error HTTP ${response.code}")
                     throw IOException("HTTP error ${response.code}")
                 }
                 val body = response.body ?: throw IOException("Empty response body")
@@ -205,6 +273,7 @@ class TelegramApiClient(
             }
             Result.success(destinationFile)
         } catch (e: Exception) {
+            addDebugLog("downloadFile Exception: ${e.message}")
             Result.failure(e)
         }
     }

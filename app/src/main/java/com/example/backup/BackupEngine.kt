@@ -38,9 +38,11 @@ class BackupEngine(private val context: Context) {
 
     private val _currentJobFileName = MutableStateFlow<String?>(null)
     val currentJobFileName: StateFlow<String?> = _currentJobFileName.asStateFlow()
+    val currentUploadingName: StateFlow<String?> get() = currentJobFileName
 
     private val _currentJobProgress = MutableStateFlow(0)
     val currentJobProgress: StateFlow<Int> = _currentJobProgress.asStateFlow()
+    val currentUploadingProgress: StateFlow<Int> get() = currentJobProgress
 
     suspend fun enqueueMedia(media: LocalMediaEntity, channelId: String = ""): Boolean = withContext(Dispatchers.IO) {
         val targetChannel = if (channelId.isNotBlank()) channelId else uploadManager.getNextRoundRobinChannel()

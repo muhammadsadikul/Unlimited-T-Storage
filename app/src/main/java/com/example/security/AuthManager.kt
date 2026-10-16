@@ -30,6 +30,7 @@ class AuthManager(context: Context) {
 
         private const val KEY_FAILED_ATTEMPTS = "auth_failed_attempts"
         private const val KEY_LOCKOUT_TIMESTAMP = "auth_lockout_until"
+        private const val KEY_MASTER_SKIPPED = "master_pwd_skipped"
 
         private const val MAX_FAILED_ATTEMPTS = 5
         private const val LOCKOUT_DURATION_MS = 30_000L // 30 seconds lockout
@@ -46,6 +47,14 @@ class AuthManager(context: Context) {
 
     suspend fun isMasterPasswordSetup(): Boolean {
         return settingDao.get(KEY_MASTER_SETUP) == "true"
+    }
+
+    suspend fun isMasterPasswordSkipped(): Boolean {
+        return settingDao.get(KEY_MASTER_SKIPPED) == "true"
+    }
+
+    suspend fun setMasterPasswordSkipped(skipped: Boolean) {
+        settingDao.set(AppSettingEntity(KEY_MASTER_SKIPPED, if (skipped) "true" else "false"))
     }
 
     suspend fun isAppLockEnabled(): Boolean {
@@ -69,6 +78,18 @@ class AuthManager(context: Context) {
                 setupMasterPassword(pin)
             }
         }
+    }
+
+    suspend fun setAppLockEnabled(enabled: Boolean) {
+        setAppLock(enabled, null)
+    }
+
+    suspend fun clearAppLockPin() {
+        settingDao.set(AppSettingEntity(KEY_APP_LOCK_ENABLED, "false"))
+    }
+
+    suspend fun saveAppLockPin(pin: String) {
+        setAppLock(true, pin)
     }
 
     suspend fun setupMasterPassword(password: String) {

@@ -122,19 +122,7 @@ fun CollectionsScreen(
             Spacer(modifier = Modifier.height(12.dp))
         }
 
-        if (folders.isEmpty()) {
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    Box(modifier = Modifier.padding(24.dp), contentAlignment = Alignment.Center) {
-                        Text("No folders found yet. Scan media in the Photos tab.")
-                    }
-                }
-            }
-        } else {
+        if (folders.isNotEmpty()) {
             items(folders.keys.toList().size) { index ->
                 val folderName = folders.keys.toList()[index]
                 val itemsInFolder = folders[folderName] ?: emptyList()
