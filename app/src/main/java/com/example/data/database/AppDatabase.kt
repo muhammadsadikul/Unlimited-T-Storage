@@ -29,7 +29,7 @@ import com.example.data.database.entity.VaultItemEntity
         FolderRuleEntity::class,
         AppSettingEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
